@@ -1,0 +1,358 @@
+import { type ReactNode, useState, useRef, useCallback, useMemo, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import { cn, formatRelativeTime, formatExactTime } from '@/lib/utils'
+import { Avatar } from '@/components/common/Avatar'
+import { Icon } from '@/components/common/Icon'
+import { MessageActions } from './MessageActions'
+import { TypingCursor } from './TypingCursor'
+import { ToolCallBadge } from './ToolCallBadge'
+import { ActionSheet, type ActionSheetItem } from '@/components/common/ActionSheet'
+import { useLongPress } from '@/hooks/useLongPress'
+import { fetchAttachmentInfos, type AttachmentInfo } from '@/lib/api'
+import type { ToolCall, TokenUsage } from '@/types'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useChatStore } from '@/stores/chatStore'
+
+interface MessageBubbleProps {
+  role: 'user' | 'assistant'
+  content: ReactNode
+  userAvatar?: string
+  isStreaming?: boolean
+  thinkingBlock?: ReactNode
+  toolCalls?: ToolCall[]
+  attachments?: string
+  onCopy?: () => void
+  onRegenerate?: () => void
+  onLike?: () => void
+  onDislike?: () => void
+  onShare?: () => void
+  liked?: boolean
+  disliked?: boolean
+  onEdit?: () => void
+  onEditSubmit?: (content: string) => void
+  onEditSaveOnly?: (content: string) => void
+  onEditCancel?: () => void
+  onDelete?: () => void
+  isEditing?: boolean
+  rawContent?: string
+  createdAt?: string
+  isError?: boolean
+  usage?: TokenUsage
+  model?: string
+  className?: string
+}
+
+export function MessageBubble({
+  role,
+  content,
+  isStreaming = false,
+  thinkingBlock,
+  toolCalls,
+  attachments,
+  onCopy,
+  onRegenerate,
+  onLike,
+  onDislike,
+  onShare,
+  liked = false,
+  disliked = false,
+  onEdit,
+  onEditSubmit,
+  onEditSaveOnly,
+  onEditCancel,
+  onDelete,
+  isEditing = false,
+  rawContent,
+  createdAt,
+  isError = false,
+  usage,
+  model,
+  className,
+}: MessageBubbleProps) {
+  const { t, i18n } = useTranslation()
+  const locale = i18n.language
+  const showToolCalls = useSettingsStore((s) => s.showToolCalls)
+  const models = useChatStore((s) => s.models)
+  const modelName = model ? (models.find((m) => m.code === model)?.name ?? model) : undefined
+  const [editValue, setEditValue] = useState(rawContent ?? '')
+  const editRef = useRef<HTMLTextAreaElement>(null)
+
+  const attachmentIds = useMemo(() => {
+    if (!attachments) return []
+    try { return (JSON.parse(attachments) as unknown[]).map(Number).filter(Boolean) } catch { return [] }
+  }, [attachments])
+
+  const [attachInfos, setAttachInfos] = useState<AttachmentInfo[]>([])
+  const [attachError, setAttachError] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const lightboxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (attachmentIds.length === 0) return
+    setAttachError(false)
+    fetchAttachmentInfos(attachmentIds).then(setAttachInfos).catch(() => setAttachError(true))
+  }, [attachmentIds])
+
+  useEffect(() => {
+    if (!previewUrl) return
+    document.body.style.overflow = 'hidden'
+    lightboxRef.current?.focus()
+    return () => { document.body.style.overflow = '' }
+  }, [previewUrl])
+
+  // 移动端长按操作
+  const [actionSheetOpen, setActionSheetOpen] = useState(false)
+  const [actionSheetPos, setActionSheetPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+
+  const handleLongPress = useCallback(
+    (e: TouchEvent | MouseEvent) => {
+      const pos = 'touches' in e ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY }
+      setActionSheetPos(pos)
+      setActionSheetOpen(true)
+    },
+    [],
+  )
+
+  const longPressHandlers = useLongPress({ onLongPress: handleLongPress })
+
+  const mobileActions: ActionSheetItem[] = []
+  if (onCopy) mobileActions.push({ icon: 'content_copy', label: t('common.copy'), onClick: onCopy })
+  if (role === 'user' && onEdit) mobileActions.push({ icon: 'edit', label: t('common.edit'), onClick: onEdit })
+  if (role === 'assistant' && onRegenerate) mobileActions.push({ icon: 'refresh', label: t('common.regenerate'), onClick: onRegenerate })
+  if (onShare) mobileActions.push({ icon: 'share', label: t('common.share'), onClick: onShare })
+  if (onDelete) mobileActions.push({ icon: 'delete', label: t('common.delete'), onClick: onDelete })
+
+  if (role === 'user') {
+    return (
+      <div className={cn('flex flex-col items-end mb-6 group', className)} {...longPressHandlers}>
+        <div className="max-w-[75%] relative">
+          {isEditing ? (
+            <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tr-sm px-4 py-3 shadow-sm">
+              <textarea
+                ref={editRef}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="w-full bg-transparent text-gray-900 dark:text-gray-100 text-[15px] leading-7 resize-none outline-none min-h-[60px]"
+                rows={Math.max(2, editValue.split('\n').length)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    if (editValue.trim()) onEditSubmit?.(editValue.trim())
+                  }
+                  if (e.key === 'Escape') onEditCancel?.()
+                }}
+              />
+              <div className="flex justify-end space-x-2 mt-2">
+                <button
+                  onClick={onEditCancel}
+                  className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+                {onEditSaveOnly && (
+                  <button
+                    onClick={() => editValue.trim() && onEditSaveOnly(editValue.trim())}
+                    className="px-3 py-1 text-xs text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors disabled:opacity-50"
+                    disabled={!editValue.trim()}
+                  >
+                    {t('common.save')}
+                  </button>
+                )}
+                <button
+                  onClick={() => editValue.trim() && onEditSubmit?.(editValue.trim())}
+                  className="px-3 py-1 text-xs text-white bg-primary hover:bg-primary/90 rounded-md transition-colors disabled:opacity-50"
+                  disabled={!editValue.trim()}
+                >
+                  {t('common.send')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-2xl rounded-tr-sm px-5 py-3.5 leading-7 shadow-sm" style={{ fontSize: 'var(--chat-font-size, 16px)' }}>
+                {content}
+              </div>
+              {attachInfos.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5 justify-end">
+                  {attachInfos.map((info) =>
+                    info.isImage ? (
+                      <button
+                        key={info.id}
+                        onClick={() => setPreviewUrl(info.url)}
+                        className="w-20 h-20 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 hover:opacity-80 transition-opacity"
+                      >
+                        <img src={info.url} alt={info.fileName} className="w-full h-full object-cover" />
+                      </button>
+                    ) : (
+                      <a
+                        key={info.id}
+                        href={info.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center space-x-1 px-2 py-1 bg-gray-100 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-md text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors max-w-[200px]"
+                      >
+                        <Icon name="attach_file" size="xs" className="flex-shrink-0" />
+                        <span className="truncate">{info.fileName}</span>
+                        <Icon name="download" size="xs" className="opacity-50 flex-shrink-0" />
+                      </a>
+                    ),
+                  )}
+                </div>
+              )}
+              {attachError && attachmentIds.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1.5 justify-end">
+                  {attachmentIds.map((id) => (
+                    <a key={id} href={`/api/attachments/${id}`} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center space-x-1 px-2 py-1 bg-gray-100 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-md text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <Icon name="attach_file" size="xs" />
+                      <span>{t('chat.attachment')}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+              {(onCopy || onEdit || onDelete) && (
+                <div className="absolute right-full -translate-x-1 top-2 hidden group-hover:flex space-x-1">
+                  {onCopy && (
+                    <button
+                      onClick={onCopy}
+                      title={t('common.copy')}
+                      className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    >
+                      <Icon name="content_copy" size="base" />
+                    </button>
+                  )}
+                  {onEdit && (
+                    <button
+                      onClick={onEdit}
+                      title={t('common.edit')}
+                      className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    >
+                      <Icon name="edit" variant="filled" size="base" />
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button
+                      onClick={onDelete}
+                      title={t('common.delete')}
+                      className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                    >
+                      <Icon name="delete" variant="outlined" size="base" />
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          {createdAt && !isEditing && (
+            <div className="mt-1 text-right">
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default" title={formatExactTime(createdAt)}>
+                {formatRelativeTime(createdAt, locale)}
+              </span>
+            </div>
+          )}
+        </div>
+        <ActionSheet open={actionSheetOpen} onClose={() => setActionSheetOpen(false)} items={mobileActions} position={actionSheetPos} />
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('mb-8 group w-full', className)} {...longPressHandlers}>
+      <div className="flex items-center gap-2 mb-3">
+        <Avatar type="ai" size="sm" />
+      </div>
+      <div className="w-full">
+        <div
+          className={cn(
+            'leading-7',
+            isError
+              ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl px-4 py-3 text-red-700 dark:text-red-400'
+              : 'text-gray-900 dark:text-gray-100',
+          )}
+          style={{ fontSize: 'var(--chat-font-size, 16px)' }}
+        >
+          {thinkingBlock}
+
+          {toolCalls && toolCalls.length > 0 && (
+            <div className="flex items-center flex-wrap gap-2 mb-4">
+              {toolCalls.map((tc) => (
+                <ToolCallBadge key={tc.id} name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />
+              ))}
+            </div>
+          )}
+
+          <div className="max-w-none">
+            {content}
+          </div>
+
+          {isStreaming && (
+            <div className="mt-1">
+              <TypingCursor />
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center mt-2">
+          <MessageActions
+            onCopy={onCopy}
+            onLike={onLike}
+            onRegenerate={onRegenerate}
+            onDislike={onDislike}
+            onShare={onShare}
+            onDelete={onDelete}
+            liked={liked}
+            disliked={disliked}
+            className="mt-0"
+          />
+          <div className="ml-auto flex items-center space-x-2 mr-1">
+            {modelName && (
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default">
+                {modelName}
+              </span>
+            )}
+            {usage && usage.totalTokens != null && (
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default" title={`${t('chat.inputTokens')}: ${usage.inputTokens ?? 0} | ${t('chat.outputTokens')}: ${usage.outputTokens ?? 0}`}>
+                {usage.inputTokens != null && usage.outputTokens != null
+                  ? `${usage.inputTokens} + ${usage.outputTokens} = ${usage.totalTokens} tokens`
+                  : `${usage.totalTokens} tokens`}
+              </span>
+            )}
+            {createdAt && (
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default" title={formatExactTime(createdAt)}>
+                {formatRelativeTime(createdAt, locale)}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <ActionSheet open={actionSheetOpen} onClose={() => setActionSheetOpen(false)} items={mobileActions} position={actionSheetPos} />
+      {previewUrl && (
+        <div
+          ref={lightboxRef}
+          role="dialog"
+          aria-modal="true"
+          tabIndex={-1}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={() => setPreviewUrl(null)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setPreviewUrl(null) }}
+        >
+          <button
+            className="absolute top-4 right-4 text-white hover:text-gray-300 p-2 rounded-full"
+            onClick={() => setPreviewUrl(null)}
+            aria-label={t('common.close')}
+          >
+            <Icon name="close" size="xl" />
+          </button>
+          <img
+            src={previewUrl}
+            alt="Preview"
+            className="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+    </div>
+  )
+}

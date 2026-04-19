@@ -1,0 +1,571 @@
+﻿using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
+using System.Text;
+using NewLife.AI.Clients.OpenAI;
+using NewLife.AI.Models;
+using NewLife.Collections;
+using NewLife.Serialization;
+
+namespace NewLife.AI.Clients.DashScope;
+
+/// <summary>阿里百炼（DashScope）对话客户端。支持 DashScope 原生协议与 OpenAI 兼容协议双模式</summary>
+/// <remarks>
+/// 通过 <see cref="AiClientOptions.Protocol"/> 控制协议模式：
+/// <list type="bullet">
+/// <item>"DashScope"（默认/空）：使用阿里云 DashScope 原生协议，走 /api/v1 端点</item>
+/// <item>"ChatCompletions"：使用 OpenAI 兼容协议，走 /compatible-mode 端点，复用基类逻辑</item>
+/// </list>
+/// 官方文档：https://help.aliyun.com/zh/model-studio/qwen-api-via-dashscope
+/// </remarks>
+/// <remarks>用连接选项初始化 DashScope 客户端</remarks>
+[AiClient("DashScope", "阿里百炼", "https://dashscope.aliyuncs.com/api/v1", Protocol = "DashScope", Description = "阿里云百炼大模型平台，支持 Qwen/通义千问全系列商业版模型")]
+[AiClientModel("qwen3-max", "Qwen3 Max", Thinking = true)]
+[AiClientModel("qwen3.5-plus", "Qwen3.5 Plus", Thinking = true, Vision = true)]
+[AiClientModel("qwen3.5-flash", "Qwen3.5 Flash", Thinking = true, Vision = true)]
+[AiClientModel("qwq-plus", "QwQ Plus", Thinking = true)]
+[AiClientModel("qwen3-plus", "Qwen3 Plus", Thinking = true)]
+[AiClientModel("qwen-vl-max", "Qwen VL Max", Vision = true)]
+[AiClientModel("qwen3-coder", "Qwen3 Coder")]
+[AiClientModel("wanx2.1-t2i-turbo", "Wanx 文生图", ImageGeneration = true, FunctionCalling = false)]
+public class DashScopeChatClient : OpenAIChatClient
+{
+    #region 属性
+    /// <inheritdoc/>
+    public override String Name { get; set; } = "阿里百炼";
+
+    /// <summary>原生 DashScope API 基础地址（/api/v1）</summary>
+    protected virtual String NativeEndpoint => "https://dashscope.aliyuncs.com/api/v1";
+
+    /// <summary>兼容模式基础地址。Embedding、重排序等沿用此端点</summary>
+    protected virtual String CompatibleEndpoint => "https://dashscope.aliyuncs.com/compatible-mode";
+
+    /// <inheritdoc/>
+    public override String DefaultEndpoint
+    {
+        get => IsNativeProtocol ? NativeEndpoint : CompatibleEndpoint;
+        set => base.DefaultEndpoint = value;
+    }
+
+    /// <summary>是否使用 DashScope 原生协议。Protocol 为空或 "DashScope" 时为原生模式</summary>
+    protected Boolean IsNativeProtocol => _options.Protocol.IsNullOrEmpty() || _options.Protocol == "DashScope";
+
+    /// <summary>默认Json序列化选项</summary>
+    public static JsonOptions DashScopeDefaultJsonOptions = new()
+    {
+        PropertyNaming = PropertyNaming.SnakeCaseLower,
+        IgnoreNullValues = true,
+    };
+    #endregion
+
+    #region 构造
+    /// <param name="options">连接选项（Endpoint、ApiKey、Model、Protocol 等）</param>
+    public DashScopeChatClient(AiClientOptions options) : base(options) => JsonOptions = DashScopeDefaultJsonOptions;
+
+    /// <summary>以 API 密钥和可选模型快速创建阿里百炼客户端</summary>
+    /// <param name="apiKey">阿里云 API Key</param>
+    /// <param name="model">默认模型编码，为空时由每次请求指定</param>
+    /// <param name="endpoint">API 地址覆盖；为空时使用内置默认地址</param>
+    public DashScopeChatClient(String apiKey, String? model = null, String? endpoint = null)
+        : this(new AiClientOptions { ApiKey = apiKey, Model = model, Endpoint = endpoint }) { }
+    #endregion
+
+    #region 对话（重写）
+    /// <summary>非流式对话。原生协议走 DashScope 格式，兼容模式委托基类</summary>
+    protected override async Task<IChatResponse> ChatAsync(IChatRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!IsNativeProtocol)
+            return await base.ChatAsync(request, cancellationToken).ConfigureAwait(false);
+
+        var model = request.Model ?? _options.Model;
+        var url = BuildUrl(request);
+        var body = DashScopeRequest.FromChatRequest(request, IsMultimodalModel(request.Model));
+        var json = await PostAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
+        var dashResp = json.ToJsonEntity<DashScopeResponse>(JsonOptions)!;
+        if (!dashResp.Code.IsNullOrEmpty())
+            throw new HttpRequestException($"[DashScope] 错误 {dashResp.Code}: {dashResp.Message}");
+
+        // 原生响应无顶层 model 字段，从请求回填
+        dashResp.Model = model;
+        if (dashResp is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion";
+
+        return dashResp;
+    }
+
+    /// <summary>流式对话。原生协议走 DashScope SSE 格式，兼容模式委托基类</summary>
+    protected override async IAsyncEnumerable<IChatResponse> ChatStreamAsync(IChatRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (!IsNativeProtocol)
+        {
+            await foreach (var chunk in base.ChatStreamAsync(request, cancellationToken).ConfigureAwait(false))
+                yield return chunk;
+            yield break;
+        }
+
+        var url = BuildUrl(request);
+        var body = DashScopeRequest.FromChatRequest(request, IsMultimodalModel(request.Model));
+
+        using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
+        using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        var lastEvent = "";
+        while (!reader.EndOfStream)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var line = await reader.ReadLineAsync().ConfigureAwait(false);
+            if (line == null) break;
+
+            if (line.StartsWith("id:")) continue;
+
+            if (line.StartsWith("event:"))
+            {
+                lastEvent = line.Substring(6).Trim();
+                continue;
+            }
+
+            if (!line.StartsWith("data:")) continue;
+
+            var data = line.Substring(5).Trim();
+            if (data.Length == 0) continue;
+
+            if (lastEvent == "error")
+            {
+                var errDic = JsonParser.Decode(data);
+                var code = errDic?["code"] as String ?? "error";
+                var message = errDic?["message"] as String ?? data;
+                throw new HttpRequestException($"[{Name}] 流式错误 {code}: {message}");
+            }
+
+            IChatResponse? chunk = null;
+            try { chunk = ParseChunk(data, request, null); } catch { }
+
+            if (chunk != null)
+            {
+                chunk.Model ??= request.Model;
+                yield return chunk;
+            }
+        }
+    }
+    #endregion
+
+    #region 模型列表
+    /// <summary>获取可用模型列表。使用兼容模式端点以保证返回完整模型目录</summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>模型列表，服务不可用时返回 null</returns>
+    public override async Task<OpenAiModelListResponse?> ListModelsAsync(CancellationToken cancellationToken = default)
+    {
+        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/models";
+        var json = await TryGetAsync(url, _options, cancellationToken).ConfigureAwait(false);
+        if (json == null) return null;
+
+        var dic = JsonParser.Decode(json);
+        if (dic == null) return null;
+
+        var response = new OpenAiModelListResponse { Object = dic["object"] as String };
+
+        if (dic["data"] is IList<Object> dataList)
+        {
+            var items = new List<OpenAiModelObject>(dataList.Count);
+            foreach (var item in dataList)
+            {
+                if (item is not IDictionary<String, Object> d) continue;
+                items.Add(new OpenAiModelObject
+                {
+                    Id = d["id"] as String,
+                    Object = d["object"] as String,
+                    OwnedBy = d["owned_by"] as String,
+                    Created = d["created"].ToLong().ToDateTime(),
+                });
+            }
+            response.Data = [.. items];
+        }
+        return response;
+    }
+    #endregion
+
+    #region 重排序（Rerank）
+    /// <summary>文档重排序。对 RAG 检索召回的候选文档按语义相关度重新排序</summary>
+    /// <param name="request">重排序请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>重排序响应</returns>
+    public async Task<RerankResponse> RerankAsync(RerankRequest request, CancellationToken cancellationToken = default)
+    {
+        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/reranks";
+        var body = new Dictionary<String, Object?>
+        {
+            ["model"] = !String.IsNullOrEmpty(request.Model) ? request.Model : "gte-rerank-v2",
+            ["input"] = new Dictionary<String, Object> { ["query"] = request.Query, ["documents"] = request.Documents },
+            ["parameters"] = BuildRerankParameters(request),
+        };
+        var json = await PostAsync(url, body, null, _options, cancellationToken).ConfigureAwait(false);
+        return ParseRerankResponse(json);
+    }
+
+    private static Dictionary<String, Object> BuildRerankParameters(RerankRequest request)
+    {
+        var p = new Dictionary<String, Object> { ["return_documents"] = request.ReturnDocuments };
+        if (request.TopN != null) p["top_n"] = request.TopN.Value;
+        return p;
+    }
+
+    private static RerankResponse ParseRerankResponse(String json)
+    {
+        var dic = JsonParser.Decode(json);
+        if (dic == null) throw new InvalidOperationException("无法解析重排序响应");
+
+        var resp = new RerankResponse { RequestId = dic["request_id"] as String };
+
+        if (dic["output"] is IDictionary<String, Object> output &&
+            output["results"] is IList<Object> resultList)
+        {
+            var results = new List<RerankResult>(resultList.Count);
+            foreach (var item in resultList)
+            {
+                if (item is not IDictionary<String, Object> r) continue;
+                var result = new RerankResult
+                {
+                    Index = r["index"].ToInt(),
+                    RelevanceScore = r["relevance_score"].ToDouble(),
+                };
+                var docVal = r["document"];
+                if (docVal != null)
+                    result.Document = docVal is IDictionary<String, Object> docDic
+                        ? docDic["text"] as String
+                        : docVal as String;
+                results.Add(result);
+            }
+            resp.Results = results;
+        }
+
+        if (dic["usage"] is IDictionary<String, Object> usage)
+            resp.Usage = new RerankUsage { TotalTokens = usage["total_tokens"].ToInt() };
+
+        return resp;
+    }
+    #endregion
+
+    #region 辅助
+    // 原生对话路径（纯文本）
+    private const String ChatGenerationPath = "/services/aigc/text-generation/generation";
+
+    // 原生对话路径（多模态：含视觉/音频/视频输入）
+    private const String MultimodalGenerationPath = "/services/aigc/multimodal-generation/generation";
+
+    /// <summary>构建请求地址。子类可重写此方法根据请求参数动态调整路径（如不同模型使用不同端点）</summary>
+    protected override String BuildUrl(IChatRequest request)
+    {
+        var path = IsMultimodalModel(request.Model) ? MultimodalGenerationPath : ChatGenerationPath;
+
+        // 原生协议只能对接 /api/v1 端点；若用户配置了兼容模式地址则忽略并回退到原生端点
+        var endpoint = _options.Endpoint;
+        if (endpoint.IsNullOrWhiteSpace() ||
+            endpoint.IndexOf("compatible-mode", StringComparison.OrdinalIgnoreCase) >= 0)
+            endpoint = NativeEndpoint;
+        return endpoint.TrimEnd('/') + path;
+    }
+
+    /// <summary>判断指定模型是否为多模态模型（需走 multimodal-generation 端点）</summary>
+    /// <remarks>
+    /// 命名规律：
+    /// <list type="bullet">
+    /// <item>含 -vl：Vision-Language 系列</item>
+    /// <item>qvq- 前缀：视觉推理系列（区别于纯文本推理 qwq-）</item>
+    /// <item>qwen3.X- 前缀（如 qwen3.5-/qwen3.6-）：内置多模态能力，仅支持 multimodal-generation 端点</item>
+    /// </list>
+    /// </remarks>
+    private static Boolean IsMultimodalModel(String? model)
+    {
+        if (String.IsNullOrEmpty(model)) return false;
+        if (model.IndexOf("-vl", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (model.StartsWith("qvq-", StringComparison.OrdinalIgnoreCase)) return true;
+        if (model.StartsWithIgnoreCase("qwen3.5-", "qwen3.")) return true;
+        return false;
+    }
+
+    /// <summary>解析 DashScope 原生流式 SSE chunk，DashScopeResponse 适配器同时设置 Delta</summary>
+    protected override IChatResponse? ParseChunk(String data, IChatRequest request, String? lastEvent)
+    {
+        var chunk = data.ToJsonEntity<DashScopeResponse>(JsonOptions);
+        chunk?.Model = request.Model;
+        if (chunk is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion.chunk";
+        return chunk;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>多模态响应中 content 为数组格式（[{"text":"..."}]），归一化为字符串</remarks>
+    protected override void OnParseChatMessage(ChatMessage msg, IDictionary<String, Object> dic)
+    {
+        if (msg.Content is not IList<Object> contentList) return;
+
+        var sb = Pool.StringBuilder.Get();
+        foreach (var item in contentList)
+        {
+            if (item is IDictionary<String, Object> d && d["text"] is String t)
+                sb.Append(t);
+        }
+        msg.Content = sb.Return(true);
+    }
+
+    /// <inheritdoc/>
+    protected override void SetHeaders(HttpRequestMessage request, IChatRequest? chatRequest, AiClientOptions options)
+    {
+        if (!String.IsNullOrEmpty(options.ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
+
+        if (!IsNativeProtocol) return;
+        if (chatRequest == null || !chatRequest.Stream) return;
+
+        var path = request.RequestUri?.AbsolutePath;
+        if (String.IsNullOrEmpty(path)) return;
+
+        if (!path.EndsWith(ChatGenerationPath, StringComparison.OrdinalIgnoreCase) &&
+            !path.EndsWith(MultimodalGenerationPath, StringComparison.OrdinalIgnoreCase)) return;
+
+        // qwen-plus 不能识别为多模态，得使用文本完成地址，但是accept需要text/event-stream
+        //var model = chatRequest?.Model ?? options.Model;
+        //if (IsMultimodalModel(model) || model.EndsWithIgnoreCase("-max", "-plus", "-turbo"))
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        //else
+        request.Headers.TryAddWithoutValidation("X-DashScope-SSE", "enable");
+    }
+
+    /// <summary>根据千问模型 ID 命名规律推断模型能力</summary>
+    /// <remarks>
+    /// 阿里百炼模型命名规律（基于 2026-04 官方文档）：
+    /// <list type="bullet">
+    /// <item>qwen*-vl* / qvq-*：视觉能力</item>
+    /// <item>qwen3.X-*（如 qwen3.5-/qwen3.6-）中 Plus 和开源版：内置多模态（视觉），Flash/Max/Coder 纯文本</item>
+    /// <item>qwq-* / qvq-*：专用推理模型，始终具备思考能力</item>
+    /// <item>qwen3*（除 coder 和 -instruct 后缀）：qwen3 时代全系列支持思考模式</item>
+    /// <item>qwen-max/plus/flash/turbo（稳定版别名）：当前均指向 qwen3 时代，支持思考</item>
+    /// <item>qwen-long / qwen2* / qwen1*：不支持思考模式</item>
+    /// <item>qwen*-omni*：全模态模型，视觉+音频，使用专用 API</item>
+    /// <item>wanx* / wan2* / flux* / qwen-image* / z-image*：文生图/视频生成</item>
+    /// <item>embed* / rerank* / paraformer* / cosyvoice* / sambert* 等：非对话模型</item>
+    /// <item>farui* / qwen-mt*：专用模型，不支持函数调用</item>
+    /// </list>
+    /// 注意：-max/-plus 本身不是思考能力的可靠信号，早期 qwen-max（qwen2 时代）不支持思考
+    /// </remarks>
+    /// <param name="modelId">模型标识</param>
+    /// <returns>推断出的能力信息，无法推断时返回 null</returns>
+    public override AiProviderCapabilities? InferModelCapabilities(String? modelId)
+    {
+        if (String.IsNullOrEmpty(modelId)) return null;
+
+        // 非对话模型：嵌入、重排序、语音识别/合成等
+        if (modelId.StartsWith("text-embedding", StringComparison.OrdinalIgnoreCase) ||
+            modelId.Contains("embed", StringComparison.OrdinalIgnoreCase) ||
+            modelId.Contains("rerank", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("paraformer", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("cosyvoice", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("sambert", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("fun-asr", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("sensevoice", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("qwen-audio", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWithIgnoreCase("qwen3-asr", "qwen3-tts", "qwen-tts", "qwen-voice"))
+            return new AiProviderCapabilities(false, false, false, false);
+
+        var thinking = false;
+        var vision = false;
+        var imageGen = false;
+        var funcCall = true;
+        var audio = false;
+        var videoGen = false;
+        var contextLength = 32_768;
+
+        // 文生图：wanx / flux / stable-diffusion / qwen-image / z-image
+        if (modelId.StartsWith("wanx", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("flux", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("stable-diffusion", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("qwen-image", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("z-image", StringComparison.OrdinalIgnoreCase))
+            return new AiProviderCapabilities(false, false, false, false, true, false, 0);
+
+        // 文生视频 / 图生视频：wan2*-t2v* / wan2*-i2v*
+        if (modelId.StartsWith("wan2", StringComparison.OrdinalIgnoreCase) &&
+            (modelId.Contains("-t2v", StringComparison.OrdinalIgnoreCase) ||
+             modelId.Contains("-i2v", StringComparison.OrdinalIgnoreCase)))
+            return new AiProviderCapabilities(false, false, false, false, false, true, 0);
+
+        // 文生图：wan2 其他系列（如 wan2*-t2i*）
+        if (modelId.StartsWith("wan2", StringComparison.OrdinalIgnoreCase))
+            return new AiProviderCapabilities(false, false, false, false, true, false, 0);
+
+        // 全模态模型 omni：视觉+音频输入输出，使用专用 API，不支持标准函数调用
+        if (modelId.Contains("-omni", StringComparison.OrdinalIgnoreCase))
+            return new AiProviderCapabilities(false, false, true, true, false, false, 32_768);
+
+        // === 视觉能力 ===
+        // VL 系列和 QVQ 视觉推理模型
+        if (modelId.Contains("-vl", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("qvq-", StringComparison.OrdinalIgnoreCase))
+            vision = true;
+
+        // qwen3.X-*（如 qwen3.5-/qwen3.6-）中 Plus 和开源模型支持多模态（文本+图像+视频输入）
+        // Flash/Max/Turbo/Coder 子系列为纯文本，"qwen3." 不匹配 "qwen3-max" 等
+        if (modelId.StartsWithIgnoreCase("qwen3.") &&
+            !modelId.Contains("-flash", StringComparison.OrdinalIgnoreCase) &&
+            !modelId.Contains("-max", StringComparison.OrdinalIgnoreCase) &&
+            !modelId.Contains("-turbo", StringComparison.OrdinalIgnoreCase) &&
+            !modelId.Contains("-coder", StringComparison.OrdinalIgnoreCase))
+            vision = true;
+
+        // === 思考/推理能力 ===
+        // 按模型家族精确匹配，-max/-plus 本身不是思考能力的可靠信号
+        // 例如早期 qwen-max（qwen2 时代）不支持思考，仅 qwen3 时代才全面支持
+
+        // 专用推理模型：qwq 纯文本推理，qvq 视觉推理
+        if (modelId.StartsWith("qwq-", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("qvq-", StringComparison.OrdinalIgnoreCase))
+            thinking = true;
+
+        // qwen3 全系列支持思考模式（qwen3-max/qwen3.5-plus/qwen3.5-flash 等）
+        // 排除：coder（instruct-only）、-instruct 后缀（显式非思考版本）
+        if (modelId.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase) &&
+            !modelId.Contains("-coder", StringComparison.OrdinalIgnoreCase) &&
+            !modelId.Contains("-instruct", StringComparison.OrdinalIgnoreCase))
+            thinking = true;
+
+        // 稳定版别名当前均指向 qwen3 时代，支持思考模式
+        // qwen-max → qwen3-max, qwen-plus → qwen3.6-plus, qwen-flash → qwen3.5-flash
+        if (modelId.StartsWithIgnoreCase("qwen-max", "qwen-plus", "qwen-flash", "qwen-turbo"))
+            thinking = true;
+
+        // 明确不支持思考的模型
+        if (modelId.StartsWithIgnoreCase("qwen-long", "qwen2", "qwen1"))
+            thinking = false;
+
+        // === 函数调用 ===
+        // 专用模型不支持函数调用
+        if (modelId.StartsWith("farui", StringComparison.OrdinalIgnoreCase) ||
+            modelId.StartsWith("qwen-mt", StringComparison.OrdinalIgnoreCase))
+            funcCall = false;
+
+        // === 上下文长度 ===
+        // qwen-long 专为长文档设计，支持 1M tokens
+        if (modelId.StartsWithIgnoreCase("qwen-long"))
+            contextLength = 1_000_000;
+        // qwen3/qwen3.5 全系列、稳定版别名（qwen-max/plus/flash/turbo）、推理模型（qwq/qvq）、qwen2.5 系列
+        else if (modelId.StartsWithIgnoreCase("qwen3", "qwen-max", "qwen-plus", "qwen-flash", "qwen-turbo",
+            "qwq-", "qvq-", "qwen2.5"))
+            contextLength = 131_072;
+        // deepseek 系列
+        else if (modelId.StartsWith("deepseek", StringComparison.OrdinalIgnoreCase))
+            contextLength = 65_536;
+        // 其余对话模型默认 32K（已在变量初始化时设置）
+
+        return new AiProviderCapabilities(thinking, funcCall, vision, audio, imageGen, videoGen, contextLength);
+    }
+    #endregion
+
+    #region 文生视频
+    /// <summary>提交视频生成任务。使用 DashScope 原生异步任务接口</summary>
+    /// <param name="request">视频生成请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>任务提交响应，含 TaskId</returns>
+    public override async Task<VideoTaskSubmitResponse> SubmitVideoGenerationAsync(VideoGenerationRequest request, CancellationToken cancellationToken = default)
+    {
+        var endpoint = NativeEndpoint.TrimEnd('/');
+        var url = endpoint + "/services/aigc/video-generation/generation";
+
+        var body = new Dictionary<String, Object?>
+        {
+            ["model"] = request.Model ?? _options.Model,
+            ["input"] = BuildVideoInput(request),
+            ["parameters"] = BuildVideoParameters(request),
+        };
+
+        var json = await PostAsync(url, body, null, _options, cancellationToken).ConfigureAwait(false);
+        return ParseDashScopeVideoSubmitResponse(json);
+    }
+
+    /// <summary>查询视频生成任务状态。使用 DashScope 的 /tasks/{task_id} 接口</summary>
+    /// <param name="taskId">任务编号</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>任务状态响应</returns>
+    public override async Task<VideoTaskStatusResponse> GetVideoTaskAsync(String taskId, CancellationToken cancellationToken = default)
+    {
+        var endpoint = NativeEndpoint.TrimEnd('/');
+        var url = endpoint + $"/tasks/{taskId}";
+
+        var json = await GetAsync(url, null, _options, cancellationToken).ConfigureAwait(false);
+        return ParseDashScopeVideoStatusResponse(json);
+    }
+
+    /// <summary>构建 DashScope 视频生成 input 字段</summary>
+    private static Dictionary<String, Object?> BuildVideoInput(VideoGenerationRequest request)
+    {
+        var input = new Dictionary<String, Object?> { ["prompt"] = request.Prompt };
+        if (!String.IsNullOrEmpty(request.ImageUrl))
+            input["img_url"] = request.ImageUrl;
+        if (!String.IsNullOrEmpty(request.NegativePrompt))
+            input["negative_prompt"] = request.NegativePrompt;
+        return input;
+    }
+
+    /// <summary>构建 DashScope 视频生成 parameters 字段</summary>
+    private static Dictionary<String, Object?>? BuildVideoParameters(VideoGenerationRequest request)
+    {
+        var param = new Dictionary<String, Object?>();
+        if (!String.IsNullOrEmpty(request.Size))
+            param["size"] = request.Size;
+        if (request.Duration > 0)
+            param["duration"] = request.Duration;
+        if (request.Fps > 0)
+            param["fps"] = request.Fps;
+        if (request.Seed.HasValue)
+            param["seed"] = request.Seed.Value;
+        return param.Count > 0 ? param : null;
+    }
+
+    /// <summary>解析 DashScope 视频任务提交响应</summary>
+    private VideoTaskSubmitResponse ParseDashScopeVideoSubmitResponse(String json)
+    {
+        var dic = JsonParser.Decode(json);
+        if (dic == null) return new VideoTaskSubmitResponse();
+
+        var output = dic["output"] as IDictionary<String, Object>;
+        return new VideoTaskSubmitResponse
+        {
+            TaskId = output?["task_id"] as String,
+            RequestId = dic["request_id"] as String,
+            Status = output?["task_status"] as String,
+        };
+    }
+
+    /// <summary>解析 DashScope 视频任务状态响应</summary>
+    private VideoTaskStatusResponse ParseDashScopeVideoStatusResponse(String json)
+    {
+        var dic = JsonParser.Decode(json);
+        if (dic == null) return new VideoTaskStatusResponse();
+
+        var output = dic["output"] as IDictionary<String, Object>;
+        var resp = new VideoTaskStatusResponse
+        {
+            TaskId = output?["task_id"] as String,
+            RequestId = dic["request_id"] as String,
+            Status = output?["task_status"] as String,
+        };
+
+        // 视频URL在 output.video_url 或 output.results[].url
+        if (output?["video_url"] is String videoUrl)
+        {
+            resp.VideoUrls = [videoUrl];
+        }
+        else if (output?["results"] is IList<Object> results)
+        {
+            resp.VideoUrls = results
+                .OfType<IDictionary<String, Object>>()
+                .Select(r => r["url"] as String ?? "")
+                .Where(u => u.Length > 0)
+                .ToArray();
+        }
+
+        resp.ErrorCode = output?["code"] as String ?? dic["code"] as String;
+        resp.ErrorMessage = output?["message"] as String ?? dic["message"] as String;
+
+        return resp;
+    }
+    #endregion
+}

@@ -1,0 +1,302 @@
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
+import { Icon } from '@/components/common/Icon'
+import { fetchConversations, searchMessages, type MessageSearchResult } from '@/lib/api'
+import type { Conversation } from '@/types'
+
+type TimeGroup = 'pinned' | 'today' | 'yesterday' | 'past7days' | 'past30days' | 'earlier'
+
+function getTimeGroup(dateStr?: string): TimeGroup {
+  if (!dateStr) return 'earlier'
+  const d = new Date(dateStr)
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startOfYesterday = new Date(startOfToday.getTime() - 86400000)
+  const start7d = new Date(startOfToday.getTime() - 6 * 86400000)
+  const start30d = new Date(startOfToday.getTime() - 29 * 86400000)
+  if (d >= startOfToday) return 'today'
+  if (d >= startOfYesterday) return 'yesterday'
+  if (d >= start7d) return 'past7days'
+  if (d >= start30d) return 'past30days'
+  return 'earlier'
+}
+
+const groupOrder: TimeGroup[] = ['pinned', 'today', 'yesterday', 'past7days', 'past30days', 'earlier']
+
+interface ConversationListProps {
+  conversations: Conversation[]
+  activeId?: string
+  onSelect: (id: string) => void
+  onDelete?: (id: string) => void
+  onPin?: (id: string, isPinned: boolean) => void
+  onRename?: (id: string, title: string) => void
+  onLoadMore?: () => void
+  className?: string
+}
+
+function ConversationIcon({ conv }: { conv: Conversation }) {
+  if (conv.icon && conv.iconColor) {
+    return (
+      <span
+        className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] text-white')}
+        style={{ backgroundColor: conv.iconColor }}
+      >
+        {conv.icon}
+      </span>
+    )
+  }
+  if (conv.isPinned) {
+    return <Icon name="smart_toy" size="lg" className="text-gray-500" />
+  }
+  return <Icon name="chat_bubble_outline" size="lg" className="text-gray-400" />
+}
+
+export function ConversationList({
+  conversations,
+  activeId,
+  onSelect,
+  onDelete,
+  onPin,
+  onRename,
+  onLoadMore,
+  className,
+}: ConversationListProps) {
+  const { t } = useTranslation()
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const [searchResults, setSearchResults] = useState<Conversation[] | null>(null)
+  const [messageResults, setMessageResults] = useState<MessageSearchResult[]>([])
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null)
+      setMessageResults([])
+      return
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      const kw = searchQuery.trim()
+      fetchConversations(1, 50, kw)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]))
+      searchMessages(kw, 1, 10)
+        .then((r) => setMessageResults(r.items))
+        .catch(() => setMessageResults([]))
+    }, 300)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [searchQuery])
+
+  const handleSelect = useCallback((id: string) => {
+    setConfirmDeleteId(null)
+    setSearchQuery('')
+    onSelect(id)
+  }, [onSelect])
+
+  const handleRenameStart = (conv: Conversation) => {
+    setEditingId(conv.id)
+    setEditTitle(conv.title)
+  }
+
+  const handleRenameSubmit = (id: string) => {
+    const trimmed = editTitle.trim()
+    if (trimmed && onRename) {
+      onRename(id, trimmed)
+    }
+    setEditingId(null)
+  }
+
+  const groupLabelKey: Record<TimeGroup, string> = {
+    pinned: 'sidebar.pinned',
+    today: 'sidebar.today',
+    yesterday: 'sidebar.yesterday',
+    past7days: 'sidebar.past7days',
+    past30days: 'sidebar.past30days',
+    earlier: 'sidebar.earlier',
+  }
+
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const handleListScroll = useCallback(() => {
+    const el = listRef.current
+    if (!el || !onLoadMore) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
+      onLoadMore()
+    }
+  }, [onLoadMore])
+
+  const filtered = useMemo(() => {
+    if (!searchQuery.trim()) return conversations
+    if (searchResults !== null) return searchResults
+    // 在后端搜索结果返回前，先用客户端过滤作为即时反馈
+    const q = searchQuery.trim().toLowerCase()
+    return conversations.filter((c) => c.title.toLowerCase().includes(q))
+  }, [conversations, searchQuery, searchResults])
+
+  const grouped = useMemo(() => {
+    const map = new Map<TimeGroup, Conversation[]>()
+    for (const g of groupOrder) map.set(g, [])
+    for (const conv of filtered) {
+      const g = conv.isPinned ? 'pinned' : getTimeGroup(conv.updatedAt)
+      map.get(g)!.push(conv)
+    }
+    return groupOrder.filter((g) => map.get(g)!.length > 0).map((g) => ({ group: g, items: map.get(g)! }))
+  }, [filtered])
+
+  return (
+    <div ref={listRef} onScroll={handleListScroll} className={cn('flex-1 overflow-y-auto custom-scrollbar px-3 pb-2', className)}>
+      {conversations.length > 5 && (
+        <div className="relative px-1 mb-2">
+          <Icon name="search" size="sm" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            ref={searchRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t('sidebar.searchPlaceholder')}
+            className="w-full pl-8 pr-7 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 border border-transparent focus:border-primary/30 rounded-lg outline-none text-gray-700 dark:text-gray-300 placeholder-gray-400"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => { setSearchQuery(''); searchRef.current?.focus() }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              <Icon name="close" size="xs" />
+            </button>
+          )}
+        </div>
+      )}
+      {grouped.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+          <Icon name={searchQuery ? 'search_off' : 'chat_bubble_outline'} size="xl" className="mb-2 opacity-50" />
+          <span className="text-xs">{searchQuery ? t('sidebar.noResults') : t('sidebar.empty')}</span>
+        </div>
+      )}
+      {grouped.map(({ group, items }) => (
+        <div key={group}>
+          <div className="text-xs text-gray-400 px-3 py-2 font-medium">{t(groupLabelKey[group])}</div>
+          <ul className="space-y-0.5">
+            {items.map((conv) => {
+              const isActive = conv.id === activeId
+              const isEditing = editingId === conv.id
+              return (
+                <li key={conv.id}>
+                  <div
+                    className={cn(
+                      'group flex items-center space-x-2 px-3 py-2 rounded-lg text-sm w-full relative transition-colors',
+                      isActive
+                        ? 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 font-medium'
+                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200/50 dark:hover:bg-gray-700/50',
+                    )}
+                  >
+                    <button
+                      onClick={() => handleSelect(conv.id)}
+                      className="flex items-center space-x-2 flex-1 min-w-0 text-left focus-visible:outline-none"
+                    >
+                      <ConversationIcon conv={conv} />
+                      {isEditing ? (
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onBlur={() => handleRenameSubmit(conv.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRenameSubmit(conv.id)
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex-1 min-w-0 bg-white dark:bg-gray-700 border border-primary/40 rounded px-1 py-0.5 text-sm outline-none"
+                        />
+                      ) : (
+                        <span className="truncate">{conv.title}</span>
+                      )}
+                    </button>
+
+                    {!isEditing && (
+                      <div className="hidden group-hover:flex items-center space-x-0.5 flex-shrink-0">
+                        {onPin && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onPin(conv.id, !conv.isPinned) }}
+                            className="p-0.5 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                            title={conv.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
+                          >
+                            <Icon name="push_pin" variant={conv.isPinned ? 'filled' : 'outlined'} size="sm" />
+                          </button>
+                        )}
+                        {onRename && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRenameStart(conv) }}
+                            className="p-0.5 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                            title={t('sidebar.rename')}
+                          >
+                            <Icon name="edit" size="sm" />
+                          </button>
+                        )}
+                        {onDelete && confirmDeleteId === conv.id ? (
+                          <div className="flex items-center space-x-0.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onDelete(conv.id); setConfirmDeleteId(null) }}
+                              className="p-0.5 rounded bg-red-500 text-white hover:bg-red-600 transition-colors"
+                              title={t('common.confirm')}
+                            >
+                              <Icon name="check" size="sm" />
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
+                              className="p-0.5 rounded hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                              title={t('common.cancel')}
+                            >
+                              <Icon name="close" size="sm" />
+                            </button>
+                          </div>
+                        ) : onDelete && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(conv.id) }}
+                            className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 transition-colors"
+                            title={t('sidebar.delete')}
+                          >
+                            <Icon name="delete" size="sm" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {!isEditing && conv.isPinned && (
+                      <span className="absolute right-3 rotate-45 transform group-hover:hidden">
+                        <Icon name="push_pin" variant="filled" size="xs" className="text-gray-400" />
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      ))}
+      {searchQuery.trim() && messageResults.length > 0 && (
+        <div className="mt-2 border-t border-gray-100 dark:border-gray-800 pt-2">
+          <div className="text-xs text-gray-400 px-3 py-1 font-medium">{t('sidebar.messageResults')}</div>
+          <ul className="space-y-0.5">
+            {messageResults.map((msg) => (
+              <li key={msg.id}>
+                <button
+                  onClick={() => handleSelect(msg.conversationId)}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-colors"
+                >
+                  <div className="flex items-center space-x-1 text-xs text-gray-400 mb-0.5">
+                    <Icon name="chat_bubble_outline" size="xs" />
+                    <span className="truncate">{msg.conversationTitle}</span>
+                  </div>
+                  <p className="text-gray-600 dark:text-gray-300 text-xs line-clamp-2">{msg.content}</p>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}

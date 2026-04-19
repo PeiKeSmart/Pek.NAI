@@ -1,0 +1,100 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>ChatAI</AssemblyName>
+    <AssemblyTitle>多模态AI对话与网关</AssemblyTitle>
+    <Description>集对话前端、统一 AI 网关、Agent 平台于一身的完整 AI 应用。支持多轮对话、流式输出、函数调用、图像生成、会话管理与使用量统计</Description>
+    <Company>新生命开发团队</Company>
+    <Copyright>©2002-2026 NewLife</Copyright>
+    <VersionPrefix>1.1</VersionPrefix>
+    <VersionSuffix>$([System.DateTime]::Now.ToString(`yyyy.MMdd`))</VersionSuffix>
+    <Version>$(VersionPrefix).$(VersionSuffix)</Version>
+    <FileVersion>$(Version)</FileVersion>
+    <AssemblyVersion>$(VersionPrefix).*</AssemblyVersion>
+    <Deterministic>false</Deterministic>
+    <OutputPath>..\Bin\Web</OutputPath>
+    <!--<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>-->
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <SignAssembly>True</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\Doc\newlife.snk</AssemblyOriginatorKeyFile>
+    <NoWarn>1701;1702;NU5104;NETSDK1138;CS7035;NETSDK1022</NoWarn>
+    <!--<EnableDefaultContentItems>false</EnableDefaultContentItems>-->
+  </PropertyGroup>
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>NewLife.ChatAI</PackageId>
+    <Authors>$(Company)</Authors>
+    <PackageProjectUrl>https://ai.newlifex.com</PackageProjectUrl>
+    <PackageIcon>leaf.png</PackageIcon>
+    <RepositoryUrl>https://github.com/NewLifeX/NewLife.AI</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>新生命团队;AI;NewLife;$(AssemblyName)</PackageTags>
+    <PackageReleaseNotes>新增技能系统与用户记忆自动提取；支持图片拖拽/粘贴上传多模态对话；思考模式 Auto/Think/Fast 三档切换；推荐问题引导；AppKey 管理与模型限制；全文消息/会话搜索；用量记录统计；MCP 服务器配置；消息删除与纯编辑；内置网络/翻译工具</PackageReleaseNotes>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PackageReadmeFile>Readme.MD</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot\**\*" />
+  </ItemGroup>
+
+  <!-- wwwroot 已嵌入 DLL，移除 NuGet 包中的 staticwebassets/ 目录
+       单目标框架走 IncludeStaticWebAssetsPackItems，多目标框架走 CrossTargetingIncludeStaticWebAssets，需同时挂两个目标 -->
+  <Target Name="ClearStaticWebAssetsFromPack" AfterTargets="IncludeStaticWebAssetsPackItems;CrossTargetingIncludeStaticWebAssets">
+    <ItemGroup>
+      <Content Remove="@(_StaticWebAssetsFilesToPack)" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <Content Include="..\Doc\leaf.png" Link="leaf.png" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Readme.MD">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NewLife.Cube.Core" Version="6.10.2026.404" />
+    <PackageReference Include="NewLife.Holiday" Version="1.4.2026.206" />
+    <PackageReference Include="NewLife.MySql" Version="1.0.2026.402" />
+    <PackageReference Include="NewLife.XCode" Version="11.25.2026.403" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NewLife.AI\NewLife.AI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 从所有可能的项集中移除临时目录 -->
+    <Content Remove="Entity\Config\**\*" />
+    <None Remove="Entity\Config\**\*" />
+    <EmbeddedResource Remove="Entity\Config\**\*" />
+  </ItemGroup>
+
+</Project>
