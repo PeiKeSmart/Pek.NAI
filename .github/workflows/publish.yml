@@ -7,25 +7,39 @@ on:
 
 jobs:
   build-publish:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4
+      with:
+        version: latest
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: pnpm
+        cache-dependency-path: Web/pnpm-lock.yaml
+
     - name: Setup dotNET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: |
-          8.x
-          9.x
-          10.x
-    - name: Restore
-      run: |
-        dotnet restore Pek.MiniExcel/Pek.MiniExcel.csproj
-    - name: Build
-      run: |
-        dotnet pack --no-restore --version-suffix $(date "+%Y.%m%d") -c Release -o out Pek.MiniExcel/Pek.MiniExcel.csproj
+        dotnet-version: 10.x
+
+    - name: Install frontend dependencies
+      run: pnpm --dir Web install --frozen-lockfile
+
+    - name: Build frontend
+      run: pnpm --dir Web build
+
+    - name: Pack Pek.NAI
+      run: dotnet pack -c Release -o out Pek.NAI/Pek.NAI.csproj
+
+    - name: Pack Pek.ChatAI
+      run: dotnet pack -c Release -o out Pek.ChatAI/Pek.ChatAI.csproj
+
     - name: Publish
-      run: |
-        dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}
-        dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://nuget.chuangchu.net/v3/index.json --api-key ${{ secrets.mynugetKey }}
+      run: dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}
+           dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://nuget.chuangchu.net/v3/index.json --api-key ${{ secrets.mynugetKey }}

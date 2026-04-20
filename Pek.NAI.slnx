@@ -4,6 +4,7 @@
     <File Path=".github/copilot-instructions.md" />
     <File Path=".github/workflows/publish-beta.yml" />
     <File Path=".github/workflows/publish.yml" />
+    <File Path=".github/workflows/test.yml" />
     <File Path="global.json" />
     <File Path="NuGet.config" />
     <File Path="Readme.MD" />
