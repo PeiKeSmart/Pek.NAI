@@ -1,12 +1,12 @@
 {
   "profiles": {
-    "NewLife.AI.Extensions": {
+    "Pek.AI.Extensions": {
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:8292;http://localhost:8293"
+      "applicationUrl": "https://localhost:51923;http://localhost:51924"
     }
   }
 }

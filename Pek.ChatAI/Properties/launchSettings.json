@@ -1,13 +1,12 @@
 {
   "profiles": {
-    "NewLife.ChatAI": {
+    "Pek.ChatAI": {
       "commandName": "Project",
-      "dotnetRunMessages": "true",
       "launchBrowser": true,
-      "applicationUrl": "http://localhost:5080",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
-      }
+      },
+      "applicationUrl": "https://localhost:53910;http://localhost:53911"
     }
   }
 }

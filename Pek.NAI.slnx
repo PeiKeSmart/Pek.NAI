@@ -8,5 +8,9 @@
     <File Path="NuGet.config" />
     <File Path="Readme.MD" />
   </Folder>
+  <Project Path="Pek.AI.Extensions/Pek.AI.Extensions.csproj" />
+  <Project Path="Pek.ChatAI/Pek.ChatAI.csproj" />
   <Project Path="Pek.NAI/Pek.NAI.csproj" />
+  <Project Path="Test/Test.csproj" />
+  <Project Path="XUnitTest/XUnitTest.csproj" />
 </Solution>
