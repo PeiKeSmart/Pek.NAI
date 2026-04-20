@@ -6,9 +6,9 @@
     <AssemblyName>ChatAI</AssemblyName>
     <AssemblyTitle>多模态AI对话与网关</AssemblyTitle>
     <Description>集对话前端、统一 AI 网关、Agent 平台于一身的完整 AI 应用。支持多轮对话、流式输出、函数调用、图像生成、会话管理与使用量统计</Description>
-    <Company>新生命开发团队</Company>
-    <Copyright>©2002-2026 NewLife</Copyright>
-    <VersionPrefix>1.1</VersionPrefix>
+    <Company>湖北登灏科技有限公司</Company>
+    <Copyright>©2020-2026 湖北登灏科技有限公司</Copyright>
+    <VersionPrefix>4.22</VersionPrefix>
     <VersionSuffix>$([System.DateTime]::Now.ToString(`yyyy.MMdd`))</VersionSuffix>
     <Version>$(VersionPrefix).$(VersionSuffix)</Version>
     <FileVersion>$(Version)</FileVersion>
@@ -26,26 +26,30 @@
     <NoWarn>1701;1702;NU5104;NETSDK1138;CS7035;NETSDK1022</NoWarn>
     <!--<EnableDefaultContentItems>false</EnableDefaultContentItems>-->
   </PropertyGroup>
+
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <PackageId>NewLife.ChatAI</PackageId>
+    <PackageId>Pek.ChatAI</PackageId>
     <Authors>$(Company)</Authors>
-    <PackageProjectUrl>https://ai.newlifex.com</PackageProjectUrl>
-    <PackageIcon>leaf.png</PackageIcon>
-    <RepositoryUrl>https://github.com/NewLifeX/NewLife.AI</RepositoryUrl>
+    <MaintainerEmail>berin@peksmart.net</MaintainerEmail>
+    <PackageProjectUrl>https://www.haocoding.com/</PackageProjectUrl>
+    <PackageIcon>DH.png</PackageIcon>
+    <RepositoryUrl>https://github.com/PeiKeSmart/Pek.AspNetCore</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>新生命团队;AI;NewLife;$(AssemblyName)</PackageTags>
+    <PackageTags>湖北登灏科技有限公司;DH组件;DH;AI;$(AssemblyName)</PackageTags>
     <PackageReleaseNotes>新增技能系统与用户记忆自动提取；支持图片拖拽/粘贴上传多模态对话；思考模式 Auto/Think/Fast 三档切换；推荐问题引导；AppKey 管理与模型限制；全文消息/会话搜索；用量记录统计；MCP 服务器配置；消息删除与纯编辑；内置网络/翻译工具</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <PackageReadmeFile>Readme.MD</PackageReadmeFile>
+    <PackageReadmeFile></PackageReadmeFile>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <!--<GeneratePackageOnBuild>true</GeneratePackageOnBuild>-->
   </PropertyGroup>
 
   <ItemGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.202">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
@@ -64,7 +68,7 @@
   </Target>
 
   <ItemGroup>
-    <Content Include="..\Doc\leaf.png" Link="leaf.png" PackagePath="\" />
+    <Content Include="..\Doc\DH.png" Link="DH.png" PackagePath="\" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Readme.MD">
@@ -81,7 +85,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NewLife.AI\NewLife.AI.csproj" />
+    <ProjectReference Include="..\Pek.NAI\Pek.NAI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

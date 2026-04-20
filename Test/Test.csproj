@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NewLife.AI\NewLife.AI.csproj" />
+    <ProjectReference Include="..\Pek.NAI\Pek.NAI.csproj" />
   </ItemGroup>
 
 </Project>

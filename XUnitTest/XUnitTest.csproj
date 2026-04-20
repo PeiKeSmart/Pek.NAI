@@ -24,8 +24,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NewLife.AI\NewLife.AI.csproj" />
-    <ProjectReference Include="..\NewLife.ChatAI\NewLife.ChatAI.csproj" />
+    <ProjectReference Include="..\Pek.ChatAI\Pek.ChatAI.csproj" />
+    <ProjectReference Include="..\Pek.NAI\Pek.NAI.csproj" />
   </ItemGroup>
 
 </Project>

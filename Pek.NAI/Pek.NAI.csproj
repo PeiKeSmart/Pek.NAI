@@ -1,10 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <TargetFramework>netstandard2.1</TargetFramework>
     <OutputType>Library</OutputType>
-    <RootNamespace>MiniExcel</RootNamespace>
-    <AssemblyTitle>Excel处理库</AssemblyTitle>
-    <Description>基于DH框架的Excel处理库。基于https://github.com/mini-software/MiniExcel</Description>
+    <RootNamespace>Pek.NAI</RootNamespace>
+    <AssemblyTitle>统一 AI 网关基础库</AssemblyTitle>
+    <Description>多协议、多模型适配的 AI 基础设施库，支持 OpenAI/Anthropic/Gemini 等 33 个服务商，提供函数调用、图像生成、MCP 工具调用等能力</Description>
     <Company>湖北登灏科技有限公司</Company>
     <Copyright>©2020-2026 湖北登灏科技有限公司</Copyright>
     <VersionPrefix>4.22</VersionPrefix>
@@ -32,25 +32,35 @@
     <PackageIcon>DH.png</PackageIcon>
     <RepositoryUrl>https://github.com/PeiKeSmart/Pek.AspNetCore</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>湖北登灏科技有限公司;DH组件;DH;$(AssemblyName)</PackageTags>
-    <PackageReleaseNotes></PackageReleaseNotes>
+    <PackageTags>湖北登灏科技有限公司;DH组件;DH;AI;$(AssemblyName)</PackageTags>
+    <PackageReleaseNotes>服务商扩展至48个，新增 Azure OpenAI/AWS Bedrock；FinishReason 改为强类型枚举；统一 IChatRequest/IChatResponse 接口；新增 ISemanticMemory/IVectorStore 语义记忆抽象；FunctionCallingPlanner 规划器；MultiAgent 多智能体框架（GroupChat/ParallelGroupChat）；IChatFilter 中间件管道；ToolChatClient 结果截断</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <PackageReadmeFile></PackageReadmeFile>
+    <PackageReadmeFile>Readme.MD</PackageReadmeFile>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <!--<GeneratePackageOnBuild>true</GeneratePackageOnBuild>-->
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Providers\AnthropicProvider.cs" />
+    <Compile Remove="Providers\DashScopeProvider.cs" />
+    <Compile Remove="Providers\GeminiProvider.cs" />
+    <Compile Remove="Providers\IAiProvider.cs" />
+    <Compile Remove="Providers\NewLifeAiProvider.cs" />
+    <Compile Remove="Providers\OllamaProvider.cs" />
+    <Compile Remove="Providers\OpenAiProvider.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DH.NCore" Version="4.22.2026.412-beta0524" />
+    <PackageReference Include="DH.NRemoting" Version="4.21.2026.326-beta0825" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.202">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="MiniExcel" Version="1.43.0" />
-    <PackageReference Include="Pek.Common" Version="4.22.2026.416-beta1017" />
   </ItemGroup>
 
   <ItemGroup>
