@@ -1,17 +1,11 @@
-﻿using System.Globalization;
-using System.Runtime.CompilerServices;
-using System.Text;
+﻿using System.Text;
 using NewLife.AI.Models;
-using NewLife.ChatAI.Entity;
 using NewLife.ChatAI.Models;
-using NewLife.Collections;
-using NewLife.Cube.Entity;
+using NewLife.ChatAI.Entity;
 using NewLife.Data;
-using NewLife.Log;
 using NewLife.Serialization;
 using XCode;
 using XCode.Membership;
-using AiChatMessage = NewLife.AI.Models.ChatMessage;
 using ChatMessage = NewLife.ChatAI.Entity.ChatMessage;
 
 namespace NewLife.ChatAI.Services;
@@ -69,12 +63,13 @@ public class ChatApplicationService
     /// <summary>更新会话（重命名、切换模型等）</summary>
     /// <param name="conversationId">会话编号</param>
     /// <param name="request">更新请求</param>
+    /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns></returns>
-    public Task<ConversationSummaryDto?> UpdateConversationAsync(Int64 conversationId, UpdateConversationRequest request, CancellationToken cancellationToken)
+    /// <returns>更新后的会话摘要，会话不存在或无权访问时返回 null</returns>
+    public Task<ConversationSummaryDto?> UpdateConversationAsync(Int64 conversationId, UpdateConversationRequest request, Int32 userId, CancellationToken cancellationToken)
     {
         var entity = Conversation.FindById(conversationId);
-        if (entity == null) return Task.FromResult<ConversationSummaryDto?>(null);
+        if (entity == null || entity.UserId != userId) return Task.FromResult<ConversationSummaryDto?>(null);
 
         if (!String.IsNullOrWhiteSpace(request.Title))
             entity.Title = request.Title.Trim();
@@ -91,25 +86,19 @@ public class ChatApplicationService
 
     /// <summary>删除会话</summary>
     /// <param name="conversationId">会话编号</param>
+    /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns></returns>
-    public Task<Boolean> DeleteConversationAsync(Int64 conversationId, CancellationToken cancellationToken)
+    /// <returns>删除成功返回 true，会话不存在或无权访问返回 false</returns>
+    public Task<Boolean> DeleteConversationAsync(Int64 conversationId, Int32 userId, CancellationToken cancellationToken)
     {
         var entity = Conversation.FindById(conversationId);
-        if (entity == null) return Task.FromResult(false);
+        if (entity == null || entity.UserId != userId) return Task.FromResult(false);
 
         using var trans = ChatMessage.Meta.CreateTrans();
 
         // 获取关联的消息 ID 列表，用于清理消息反馈
         var messages = ChatMessage.FindAllByConversationId(conversationId);
         var messageIds = messages.Select(m => m.Id).ToArray();
-
-        // 删除关联的消息反馈
-        if (messageIds.Length > 0)
-        {
-            var feedbacks = MessageFeedback.FindAllByMessageIds(messageIds);
-            feedbacks.Delete();
-        }
 
         // 删除关联的用量记录
         var usageRecords = UsageRecord.FindAllByConversationId(conversationId);
@@ -132,17 +121,40 @@ public class ChatApplicationService
     /// <summary>置顶/取消置顶</summary>
     /// <param name="conversationId">会话编号</param>
     /// <param name="isPinned">是否置顶</param>
+    /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns></returns>
-    public Task<Boolean> SetPinAsync(Int64 conversationId, Boolean isPinned, CancellationToken cancellationToken)
+    /// <returns>操作成功返回 true，会话不存在或无权访问返回 false</returns>
+    public Task<Boolean> SetPinAsync(Int64 conversationId, Boolean isPinned, Int32 userId, CancellationToken cancellationToken)
     {
         var entity = Conversation.FindById(conversationId);
-        if (entity == null) return Task.FromResult(false);
+        if (entity == null || entity.UserId != userId) return Task.FromResult(false);
 
         entity.IsPinned = isPinned;
         entity.Update();
 
         return Task.FromResult(true);
+    }
+
+    /// <summary>验证当前用户是否有权访问指定会话</summary>
+    /// <param name="conversationId">会话编号</param>
+    /// <param name="userId">当前用户编号</param>
+    /// <returns>会话存在且属于该用户则返回 true</returns>
+    public Boolean CanAccessConversation(Int64 conversationId, Int32 userId)
+    {
+        var conv = Conversation.FindById(conversationId);
+        return conv != null && conv.UserId == userId;
+    }
+
+    /// <summary>验证当前用户是否有权访问指定消息（通过所属会话校验）</summary>
+    /// <param name="messageId">消息编号</param>
+    /// <param name="userId">当前用户编号</param>
+    /// <returns>消息及所属会话存在且属于该用户则返回 true</returns>
+    public Boolean CanAccessMessage(Int64 messageId, Int32 userId)
+    {
+        var msg = ChatMessage.FindById(messageId);
+        if (msg == null) return false;
+        var conv = Conversation.FindById(msg.ConversationId);
+        return conv != null && conv.UserId == userId;
     }
     #endregion
 
@@ -151,23 +163,19 @@ public class ChatApplicationService
     /// <param name="conversationId">会话编号</param>
     /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns></returns>
-    public Task<IReadOnlyList<MessageDto>> GetMessagesAsync(Int64 conversationId, Int32 userId, CancellationToken cancellationToken)
+    /// <returns>消息列表，会话不存在或无权访问时返回 null</returns>
+    public Task<IReadOnlyList<MessageDto>?> GetMessagesAsync(Int64 conversationId, Int32 userId, CancellationToken cancellationToken)
     {
+        var conversation = Conversation.FindById(conversationId);
+        if (conversation == null || conversation.UserId != userId) return Task.FromResult<IReadOnlyList<MessageDto>?>(null);
+
         //var p = new PageParameter { PageSize = 0, Sort = ChatMessage._.CreateTime.Asc() };
         //var list = ChatMessage.Search(conversationId, default, DateTime.MinValue, DateTime.MinValue, null, p);
         var list = ChatMessage.FindAllByConversationIdOrdered(conversationId)
             .Where(e => e.IsMain).ToList();
 
-        // 批量查询反馈，避免 N+1
-        var messageIds = list.Select(e => e.Id).ToList();
-        var feedbacks = messageIds.Count > 0
-            ? MessageFeedback.FindAllByMessageIdsAndUserId(messageIds, userId)
-                .ToDictionary(e => e.MessageId, e => e.FeedbackType)
-            : [];
-
-        var items = list.Select(e => ToMessageDto(e, feedbacks.TryGetValue(e.Id, out var ft) ? ft : default)).ToList();
-        return Task.FromResult<IReadOnlyList<MessageDto>>(items);
+        var items = list.Select(e => ToMessageDto(e)).ToList();
+        return Task.FromResult<IReadOnlyList<MessageDto>?>(items);
     }
 
     /// <summary>全文搜索消息内容。在当前用户的所有会话中按关键词搜索消息</summary>
@@ -193,7 +201,7 @@ public class ChatApplicationService
         {
             Id = e.Id,
             ConversationId = e.ConversationId,
-            ConversationTitle = e.ConversationTitle ?? "",
+            ConversationTitle = e.Title ?? "",
             Role = e.Role ?? "user",
             Content = e.Content ?? "",
             CreateTime = e.CreateTime,
@@ -205,12 +213,16 @@ public class ChatApplicationService
     /// <summary>编辑消息内容（仅修改文字，不重新生成）</summary>
     /// <param name="messageId">消息编号</param>
     /// <param name="request">编辑请求</param>
+    /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>更新后的消息 DTO，消息不存在时返回 null</returns>
-    public Task<MessageDto?> EditMessageAsync(Int64 messageId, EditMessageRequest request, CancellationToken cancellationToken)
+    /// <returns>更新后的消息 DTO，消息不存在或无权访问时返回 null</returns>
+    public Task<MessageDto?> EditMessageAsync(Int64 messageId, EditMessageRequest request, Int32 userId, CancellationToken cancellationToken)
     {
         var entity = ChatMessage.FindById(messageId);
         if (entity == null) return Task.FromResult<MessageDto?>(null);
+
+        var conv = Conversation.FindById(entity.ConversationId);
+        if (conv == null || conv.UserId != userId) return Task.FromResult<MessageDto?>(null);
 
         entity.Content = request.Content;
         entity.Update();
@@ -230,18 +242,11 @@ public class ChatApplicationService
     public Task SubmitFeedbackAsync(Int64 messageId, FeedbackRequest request, Int32 userId, CancellationToken cancellationToken)
     {
         var msg = ChatMessage.FindById(messageId);
-        var entity = MessageFeedback.FindByMessageIdAndUserId(messageId, userId);
-        entity ??= new MessageFeedback
-        {
-            MessageId = messageId,
-            UserId = userId,
-        };
-        if (msg != null) entity.ConversationId = msg.ConversationId;
+        if (msg == null) return Task.CompletedTask;
 
-        entity.FeedbackType = request.Type;
-        entity.Reason = request.Reason;
-        entity.AllowTraining = request.AllowTraining ?? false;
-        entity.Save();
+        msg.FeedbackType = request.Type;
+        msg.FeedbackReason = request.Reason;
+        msg.Update();
 
         return Task.CompletedTask;
     }
@@ -253,8 +258,13 @@ public class ChatApplicationService
     /// <returns></returns>
     public Task DeleteFeedbackAsync(Int64 messageId, Int32 userId, CancellationToken cancellationToken)
     {
-        var entity = MessageFeedback.FindByMessageIdAndUserId(messageId, userId);
-        entity?.Delete();
+        var msg = ChatMessage.FindById(messageId);
+        if (msg != null)
+        {
+            msg.FeedbackType = FeedbackType.None;
+            msg.FeedbackReason = null;
+            msg.Update();
+        }
 
         return Task.CompletedTask;
     }
@@ -266,10 +276,11 @@ public class ChatApplicationService
     /// <param name="request">创建分享请求</param>
     /// <param name="user">当前操作用户</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>包含分享 URL 的 DTO</returns>
-    public Task<ShareLinkDto> CreateShareLinkAsync(Int64 conversationId, CreateShareRequest request, IUser user, CancellationToken cancellationToken)
+    /// <returns>包含分享 URL 的 DTO，会话不存在或无权访问时返回 null</returns>
+    public Task<ShareLinkDto?> CreateShareLinkAsync(Int64 conversationId, CreateShareRequest request, IUser user, CancellationToken cancellationToken)
     {
         var conversation = Conversation.FindById(conversationId);
+        if (conversation == null || conversation.UserId != user.ID) return Task.FromResult<ShareLinkDto?>(null);
 
         // 获取当前最后一条消息的编号作为快照截止点
         var snapshotMessageId = ChatMessage.FindLastByConversationId(conversationId)?.Id ?? 0;
@@ -282,7 +293,7 @@ public class ChatApplicationService
         {
             ConversationId = conversationId,
             ShareToken = Guid.NewGuid().ToString("N"),
-            SnapshotTitle = conversation?.Title,
+            SnapshotTitle = conversation.Title,
             SnapshotMessageId = snapshotMessageId,
             ExpireTime = expireTime ?? DateTime.MinValue,
             CreateUserID = user.ID,
@@ -291,7 +302,7 @@ public class ChatApplicationService
         entity.Insert();
 
         var dto = new ShareLinkDto($"/share/{entity.ShareToken}", entity.CreateTime, expireTime);
-        return Task.FromResult(dto);
+        return Task.FromResult<ShareLinkDto?>(dto);
     }
 
     /// <summary>获取共享对话内容</summary>
@@ -323,12 +334,13 @@ public class ChatApplicationService
 
     /// <summary>撤销共享链接</summary>
     /// <param name="token">分享令牌</param>
+    /// <param name="userId">当前用户编号</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns></returns>
-    public Task<Boolean> RevokeShareLinkAsync(String token, CancellationToken cancellationToken)
+    /// <returns>撤销成功返回 true，链接不存在或无权操作返回 false</returns>
+    public Task<Boolean> RevokeShareLinkAsync(String token, Int32 userId, CancellationToken cancellationToken)
     {
         var share = SharedConversation.FindByShareToken(token);
-        if (share == null) return Task.FromResult(false);
+        if (share == null || share.CreateUserID != userId) return Task.FromResult(false);
 
         share.Delete();
         return Task.FromResult(true);
@@ -350,13 +362,13 @@ public class ChatApplicationService
         {
             return Task.FromResult(new[]
             {
-                new ModelInfoDto(0, "qwen-max", "Qwen-Max", true, true, true, false, false, false, 131_072),
-                new ModelInfoDto(0, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, 65_536),
-                new ModelInfoDto(0, "gpt-4o", "GPT-4o", true, true, true, false, false, false, 128_000),
+                new ModelInfoDto(0, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, 131_072),
+                new ModelInfoDto(0, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, 65_536),
+                new ModelInfoDto(0, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, 128_000),
             });
         }
 
-        var models = list.Select(e => new ModelInfoDto(e.Id, e.Code ?? String.Empty, e.Name ?? String.Empty, e.SupportThinking, e.SupportFunctionCalling, e.SupportVision, e.SupportAudio, e.SupportImageGeneration, e.SupportVideoGeneration, e.ContextLength, e.ProviderInfo?.Name ?? "")).ToArray();
+        var models = list.Select(e => new ModelInfoDto(e.Id, e.Code ?? String.Empty, e.Name ?? String.Empty, e.SupportThinking, e.SupportFunction, e.SupportVision, e.SupportAudio, e.SupportImage, e.SupportVideo, e.SupportEmbedding, e.ContextLength, e.ProviderInfo?.Name ?? "")).ToArray();
         return Task.FromResult(models);
     }
     #endregion
@@ -408,10 +420,9 @@ public class ChatApplicationService
         entity.AllowTraining = settings.AllowTraining;
         entity.McpEnabled = settings.McpEnabled;
         entity.ShowToolCalls = settings.ShowToolCalls;
+        entity.ThinkingCollapsed = settings.ThinkingCollapsed;
         entity.DefaultSkill = settings.DefaultSkill;
         entity.EnableLearning = settings.EnableLearning;
-        entity.LearningModel = settings.LearningModel;
-        entity.MemoryInjectNum = settings.MemoryInjectNum;
         entity.ContentWidth = settings.ContentWidth;
         entity.Save();
 
@@ -555,13 +566,6 @@ public class ChatApplicationService
         var messages = ChatMessage.FindAllByConversationIds(convIds);
         var msgIds = messages.Select(e => e.Id).ToArray();
 
-        // 删除消息反馈
-        if (msgIds.Length > 0)
-        {
-            var feedbacks = MessageFeedback.FindAllByMessageIds(msgIds);
-            feedbacks.Delete();
-        }
-
         // 删除用量记录
         var usageRecords = UsageRecord.FindAllByConversationIds(convIds);
         usageRecords.Delete();
@@ -585,9 +589,8 @@ public class ChatApplicationService
 
     /// <summary>转换消息实体为DTO</summary>
     /// <param name="entity">消息实体</param>
-    /// <param name="feedbackType">反馈类型。0=无反馈, 1=点赞, 2=点踩</param>
     /// <returns></returns>
-    private static MessageDto ToMessageDto(ChatMessage entity, FeedbackType feedbackType = default)
+    private static MessageDto ToMessageDto(ChatMessage entity)
     {
         // 反序列化 ToolCalls JSON
         IReadOnlyList<ToolCallDto>? toolCalls = null;
@@ -606,7 +609,8 @@ public class ChatApplicationService
             InputTokens = entity.InputTokens,
             OutputTokens = entity.OutputTokens,
             TotalTokens = entity.TotalTokens,
-            FeedbackType = (Int32)feedbackType,
+            FeedbackType = (Int32)entity.FeedbackType,
+            FeedbackReason = entity.FeedbackReason,
         };
     }
 
@@ -629,10 +633,9 @@ public class ChatApplicationService
         {
             McpEnabled = entity.McpEnabled,
             ShowToolCalls = entity.ShowToolCalls,
+            ThinkingCollapsed = entity.ThinkingCollapsed,
             DefaultSkill = entity.DefaultSkill ?? "general",
             EnableLearning = entity.EnableLearning,
-            LearningModel = entity.LearningModel ?? String.Empty,
-            MemoryInjectNum = entity.MemoryInjectNum,
             ContentWidth = entity.ContentWidth,
         };
     #endregion

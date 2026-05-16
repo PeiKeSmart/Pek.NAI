@@ -6,11 +6,8 @@ using System.Net.Http;
 using NewLife;
 using NewLife.AI.Clients;
 using NewLife.AI.Clients.OpenAI;
-using NewLife.AI.Models;
 using NewLife.ChatAI.Entity;
-using NewLife.ChatAI.Services;
 using Xunit;
-using ChatMessage = NewLife.AI.Models.ChatMessage;
 
 namespace XUnitTest.Gateway;
 
@@ -166,8 +163,8 @@ public class GatewayTests
             Model = "gpt-4o",
             Messages =
             [
-                new ChatMessage { Role = "system", Content = "You are helpful." },
-                new ChatMessage { Role = "user", Content = "Hello" },
+                new AiChatMessage { Role = "system", Content = "You are helpful." },
+                new AiChatMessage { Role = "user", Content = "Hello" },
             ],
             Stream = true,
         };
@@ -183,7 +180,7 @@ public class GatewayTests
         var request = new ChatCompletionRequest
         {
             Model = "gpt-4o",
-            Messages = [new ChatMessage { Role = "user", Content = "What's the weather?" }],
+            Messages = [new AiChatMessage { Role = "user", Content = "What's the weather?" }],
             Tools =
             [
                 new ChatTool
@@ -228,7 +225,7 @@ public class GatewayTests
                 new ChatChoice
                 {
                     Index = 0,
-                    Message = new ChatMessage { Role = "assistant", Content = "Hello!" },
+                    Message = new AiChatMessage { Role = "assistant", Content = "Hello!" },
                     FinishReason = FinishReason.Stop,
                 }
             ],
@@ -260,7 +257,7 @@ public class GatewayTests
                 new ChatChoice
                 {
                     Index = 0,
-                    Delta = new ChatMessage { Role = "assistant", Content = "He" },
+                    Delta = new AiChatMessage { Role = "assistant", Content = "He" },
                 }
             ],
         };
@@ -276,7 +273,7 @@ public class GatewayTests
     [Fact]
     public void ValidateAppKeyReturnsNullForEmptyHeader()
     {
-        var service = new GatewayService(null, null, null);
+        var service = new GatewayService(null, null!, null, null, null!);
 
         Assert.Null(service.ValidateAppKey(null));
         Assert.Null(service.ValidateAppKey(""));
@@ -286,7 +283,7 @@ public class GatewayTests
     [Fact]
     public void ValidateAppKeyParsesBearer()
     {
-        var service = new GatewayService(null, null, null);
+        var service = new GatewayService(null, null!, null, null, null!);
 
         // 当数据库没有该数据时，FindBySecret 会返回 null
         var result = service.ValidateAppKey("Bearer sk-test-nonexistent");
@@ -296,7 +293,7 @@ public class GatewayTests
     [Fact]
     public void ValidateAppKeyHandlesNoBearerPrefix()
     {
-        var service = new GatewayService(null, null, null);
+        var service = new GatewayService(null, null!, null, null, null!);
 
         // 直接传密钥，没有 Bearer 前缀，也应当可以尝试
         var result = service.ValidateAppKey("sk-direct-key");
@@ -308,7 +305,7 @@ public class GatewayTests
     [Fact]
     public void ResolveModelReturnsNullForEmpty()
     {
-        var service = new ModelService(null!, null!);
+        var service = new ModelService(null!, null, null!, null!);
 
         Assert.Null(service.ResolveModel(0));
         Assert.Null(service.ResolveModel(-1));
@@ -317,7 +314,7 @@ public class GatewayTests
     [Fact]
     public void ResolveModelReturnsNullForNonExistent()
     {
-        var service = new ModelService(null!, null!);
+        var service = new ModelService(null!, null, null!, null!);
 
         // 数据库无数据时返回 null
         Assert.Null(service.ResolveModel(99999));
@@ -326,7 +323,7 @@ public class GatewayTests
     [Fact]
     public void IsModelAllowedReturnsTrueWhenNoFilter()
     {
-        var service = new ModelService(null!, null!);
+        var service = new ModelService(null!, null, null!, null!);
         var appKey = new AppKey { Models = null };
         var model = new ModelConfig { Code = "gpt-4o", Name = "GPT-4o" };
 
@@ -336,7 +333,7 @@ public class GatewayTests
     [Fact]
     public void IsModelAllowedMatchesByCodeOrName()
     {
-        var service = new ModelService(null!, null!);
+        var service = new ModelService(null!, null, null!, null!);
         var appKey = new AppKey { Models = "qwen-max, GPT-4o" };
 
         Assert.True(service.IsModelAllowed(appKey, new ModelConfig { Code = "qwen-max", Name = "Qwen Max" }));
@@ -410,7 +407,7 @@ public class GatewayTests
         var request = new ChatCompletionRequest
         {
             Model = "gpt-4o",
-            Messages = [new ChatMessage { Role = "user", Content = "test" }],
+            Messages = [new AiChatMessage { Role = "user", Content = "test" }],
             Temperature = 0.7,
             TopP = 0.9,
             MaxTokens = 4096,
@@ -432,7 +429,7 @@ public class GatewayTests
     [Fact]
     public void MessageSupportsReasoningContent()
     {
-        var msg = new ChatMessage
+        var msg = new AiChatMessage
         {
             Role = "assistant",
             Content = "最终答案",
@@ -447,7 +444,7 @@ public class GatewayTests
     [Fact]
     public void MessageSupportsToolCalls()
     {
-        var msg = new ChatMessage
+        var msg = new AiChatMessage
         {
             Role = "assistant",
             ToolCalls =
@@ -474,7 +471,7 @@ public class GatewayTests
     [Fact]
     public void ToolRoleMessageHasToolCallId()
     {
-        var msg = new ChatMessage
+        var msg = new AiChatMessage
         {
             Role = "tool",
             ToolCallId = "call_abc",

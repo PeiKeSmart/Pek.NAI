@@ -13,6 +13,9 @@ public class SystemSettingsDto
     /// <summary>Logo地址。欢迎页自定义Logo图片URL，为空时显示默认图标</summary>
     public String LogoUrl { get; set; } = "";
 
+    /// <summary>欢迎语。欢迎页大标题，为空时前端使用默认文案</summary>
+    public String WelcomeMessage { get; set; } = "";
+
     /// <summary>自动生成标题。首条消息后是否自动生成会话标题</summary>
     public Boolean AutoGenerateTitle { get; set; }
     #endregion
@@ -48,9 +51,6 @@ public class SystemSettingsDto
     #region API 网关
     /// <summary>启用 API 网关</summary>
     public Boolean EnableGateway { get; set; }
-
-    /// <summary>API网关管道增强</summary>
-    public Boolean EnableGatewayPipeline { get; set; }
 
     /// <summary>网关限流（每分钟每用户）</summary>
     public Int32 GatewayRateLimit { get; set; }
@@ -118,6 +118,9 @@ public class SystemSettingsUpdateDto
     /// <summary>Logo地址</summary>
     public String? LogoUrl { get; set; }
 
+    /// <summary>欢迎语</summary>
+    public String? WelcomeMessage { get; set; }
+
     /// <summary>自动生成标题</summary>
     public Boolean? AutoGenerateTitle { get; set; }
     #endregion
@@ -153,9 +156,6 @@ public class SystemSettingsUpdateDto
     #region API 网关
     /// <summary>启用 API 网关</summary>
     public Boolean? EnableGateway { get; set; }
-
-    /// <summary>API网关管道增强</summary>
-    public Boolean? EnableGatewayPipeline { get; set; }
 
     /// <summary>网关限流</summary>
     public Int32? GatewayRateLimit { get; set; }

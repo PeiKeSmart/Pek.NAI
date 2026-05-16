@@ -9,6 +9,7 @@ import type { SuggestedQuestion } from '@/lib/api'
 interface WelcomePageProps {
   onSend: (message: string) => void
   siteTitle?: string
+  welcomeMessage?: string
   suggestedQuestions?: SuggestedQuestion[]
   attachments?: Attachment[]
   onAttachmentAdd?: (file: File) => void
@@ -17,7 +18,7 @@ interface WelcomePageProps {
   onPrefillConsumed?: () => void
 }
 
-export function WelcomePage({ onSend, siteTitle, suggestedQuestions, attachments = [], onAttachmentAdd, onAttachmentRemove, prefillValue, onPrefillConsumed }: WelcomePageProps) {
+export function WelcomePage({ onSend, siteTitle, welcomeMessage, suggestedQuestions, attachments = [], onAttachmentAdd, onAttachmentRemove, prefillValue, onPrefillConsumed }: WelcomePageProps) {
   const { t } = useTranslation()
   const sendShortcut = useSettingsStore((s) => s.sendShortcut)
   const contentWidth = useSettingsStore((s) => s.contentWidth)
@@ -60,7 +61,7 @@ export function WelcomePage({ onSend, siteTitle, suggestedQuestions, attachments
               </p>
             )}
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2 tracking-tight">
-              {t('welcome.greeting')}
+              {welcomeMessage || t('welcome.greeting')}
             </h1>
             <p className="text-gray-500 dark:text-gray-400 text-sm">
               {t('welcome.subtitle')}
@@ -73,12 +74,13 @@ export function WelcomePage({ onSend, siteTitle, suggestedQuestions, attachments
                   <button
                     key={q.question}
                     onClick={() => onSend(q.question)}
+                    title={q.title && q.question !== q.title ? q.question : undefined}
                     className="flex items-start space-x-2 px-4 py-3 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-600 hover:shadow-sm transition-all duration-200 text-sm text-left text-gray-700 dark:text-gray-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                   >
                     <span style={q.color ? { color: q.color } : undefined}>
                       <Icon name={q.icon || 'chat_bubble_outline'} className={q.color ? undefined : 'text-primary'} />
                     </span>
-                    <span className="line-clamp-2">{q.question}</span>
+                    <span className="line-clamp-2">{q.title || q.question}</span>
                   </button>
                 ))
               : defaultSuggestions.map((s) => (
@@ -95,7 +97,7 @@ export function WelcomePage({ onSend, siteTitle, suggestedQuestions, attachments
         </div>
       </div>
 
-      <div className="pb-6 pt-2 px-4 bg-gradient-to-t from-white via-white to-transparent dark:from-background-dark dark:via-background-dark">
+      <div className="relative z-20 pb-6 pt-2 px-4 bg-gradient-to-t from-white via-white to-transparent dark:from-background-dark dark:via-background-dark">
         <input
           ref={fileInputRef}
           type="file"

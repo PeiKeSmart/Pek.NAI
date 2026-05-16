@@ -1,32 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Runtime.Serialization;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web;
-using System.Web.Script.Serialization;
-using System.Xml.Serialization;
-using NewLife;
-using NewLife.Data;
-using NewLife.Log;
-using NewLife.Model;
-using NewLife.Reflection;
-using NewLife.Threading;
-using NewLife.Web;
+﻿using NewLife.AI.Interfaces;
 using XCode;
-using XCode.Cache;
-using XCode.Configuration;
-using XCode.DataAccessLayer;
-using XCode.Membership;
-using XCode.Shards;
 
 namespace NewLife.ChatAI.Entity;
 
-public partial class NativeTool : Entity<NativeTool>
+public partial class NativeTool : Entity<NativeTool>, INativeTool
 {
     #region 对象操作
     // 控制最大缓存数量，Find/FindAll查询方法在表行数小于该值时走实体缓存
@@ -44,8 +21,8 @@ public partial class NativeTool : Entity<NativeTool>
         Meta.Interceptors.Add(new IPInterceptor { AllowEmpty = false });
 
         // 实体缓存
-        // var ec = Meta.Cache;
-        // ec.Expire = 60;
+        var ec = Meta.Cache;
+        ec.Expire = 60;
 
         // 单对象缓存
         var sc = Meta.SingleCache;
@@ -144,7 +121,7 @@ public partial class NativeTool : Entity<NativeTool>
 
     /// <summary>查找所有启用的内置工具</summary>
     /// <returns>启用的内置工具列表</returns>
-    public static IList<NativeTool> FindAllEnabled() => FindAll(_.Enable == true);
+    public static IList<NativeTool> FindAllEnabled() => FindAllWithCache().Where(e => e.Enable).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
 
     /// <summary>按名称或显示名称查找内置工具。先匹配 Name（snake_case），再匹配 DisplayName（中文）</summary>
     /// <param name="name">名称或显示名称</param>

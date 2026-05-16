@@ -7,13 +7,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Int32 = System.Int32;
-using Int64 = System.Int64;
-using String = System.String;
-using Boolean = System.Boolean;
-using CancellationToken = System.Threading.CancellationToken;
-using NewLife.AI.Models;
-using NewLife.ChatAI.Models;
 
 namespace NewLife.ChatAI.Services;
 
@@ -342,9 +335,9 @@ public class InMemoryChatApplicationService
     {
         var models = new[]
         {
-            new ModelInfoDto(1, "qwen-max", "Qwen-Max", true, true, true, false, false, false, 131_072, "Qwen"),
-            new ModelInfoDto(2, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, 65_536, "DeepSeek"),
-            new ModelInfoDto(3, "gpt-4o", "GPT-4o", true, true, true, false, false, false, 128_000, "OpenAI")
+            new ModelInfoDto(1, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, 131_072, "Qwen"),
+            new ModelInfoDto(2, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, 65_536, "DeepSeek"),
+            new ModelInfoDto(3, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, 128_000, "OpenAI")
         };
         return Task.FromResult(models);
     }

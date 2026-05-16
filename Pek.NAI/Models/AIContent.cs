@@ -17,6 +17,10 @@ public class TextContent(String text) : AIContent
     /// <summary>文本内容</summary>
     public String Text { get; set; } = text;
 
+    /// <summary>上下文缓存控制。设为 <c>"ephemeral"</c> 启用显式缓存（DashScope / OpenAI 兼容模式）；null 表示不缓存</summary>
+    /// <remarks>最小可缓存 Token 数为 1024，有效期 5 分钟，单次请求最多 4 个标记。详见 https://help.aliyun.com/zh/model-studio/context-cache</remarks>
+    public String? CacheControl { get; set; }
+
     /// <summary>返回文本内容</summary>
     public override String ToString() => Text;
 }
@@ -35,6 +39,19 @@ public class ImageContent : AIContent
 
     /// <summary>细节级别。auto / low / high，控制 Token 消耗；默认 auto</summary>
     public String? Detail { get; set; }
+}
+
+/// <summary>音频内容片段。支持 URL 引用和二进制数据两种方式</summary>
+public class AudioContent : AIContent
+{
+    /// <summary>音频地址。http/https URL 或 data URI（优先级低于 Data）</summary>
+    public String? Uri { get; set; }
+
+    /// <summary>音频二进制数据。设置后自动编码为 base64 data URI，优先于 Uri</summary>
+    public Byte[]? Data { get; set; }
+
+    /// <summary>媒体类型。如 audio/wav、audio/mpeg，Data 不为空时生效；默认 audio/wav</summary>
+    public String MediaType { get; set; } = "audio/wav";
 }
 
 /// <summary>函数调用内容片段（assistant 角色发起的工具调用请求）</summary>

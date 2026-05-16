@@ -1,14 +1,14 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using NewLife.AI.Clients;
+using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Models;
 using NewLife.ChatAI.Services;
-using AiChatMessage = NewLife.AI.Models.ChatMessage;
 
 namespace NewLife.ChatAI.Controllers;
 
 /// <summary>图像编辑控制器。面向前端 Web UI，使用 Cookie 认证，无需 AppKey</summary>
 [Route("api/images")]
-public class ImageEditController(ModelService modelService) : ChatApiControllerBase
+public class ImageEditController(ModelService modelService, ChatSetting chatSetting) : ChatApiControllerBase
 {
     /// <summary>图像编辑。解析 multipart/form-data，路由到对应图像编辑服务商</summary>
     [HttpPost("edits")]
@@ -18,8 +18,9 @@ public class ImageEditController(ModelService modelService) : ChatApiControllerB
         var form = await Request.ReadFormAsync(cancellationToken).ConfigureAwait(false);
         var modelCode = form["model"].FirstOrDefault();
         var prompt = form["prompt"].FirstOrDefault();
-        var size = form["size"].FirstOrDefault() ?? ChatSetting.Current.DefaultImageSize;
+        var size = form["size"].FirstOrDefault() ?? chatSetting.DefaultImageSize;
         var imageFile = form.Files.GetFile("image");
+        var maskFile = form.Files.GetFile("mask");
 
         if (String.IsNullOrWhiteSpace(prompt))
             return BadRequest(new { code = "INVALID_REQUEST", message = "prompt 不能为空" });
@@ -27,60 +28,83 @@ public class ImageEditController(ModelService modelService) : ChatApiControllerB
         if (imageFile == null || imageFile.Length == 0)
             return BadRequest(new { code = "INVALID_REQUEST", message = "image 文件不能为空" });
 
-        var config = modelService.ResolveModelByCode(modelCode);
-        if (config == null)
+        var model = modelService.ResolveModelByCode(modelCode);
+        if (model == null)
             return NotFound(new { code = "MODEL_NOT_FOUND", message = $"未找到模型 '{modelCode}'" });
 
-        if (!modelService.IsAvailable(config))
-            return StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{config.GetEffectiveProvider()}'" });
+        if (!modelService.IsAvailable(model))
+            return StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{model.GetEffectiveProvider()}'" });
 
         try
         {
-            using var ms = new MemoryStream();
-            await imageFile.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
-            var imageBase64 = Convert.ToBase64String(ms.ToArray());
-            var mimeType = imageFile.ContentType ?? "image/png";
-            var dataUri = $"data:{mimeType};base64,{imageBase64}";
+            using var editClient = modelService.CreateClient(model)!;
+            if (editClient is not IImageClient imageClient)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{model.Code}' 不支持图像编辑" });
 
-            var maskFile = form.Files.GetFile("mask");
-            String? maskInfo = null;
-            if (maskFile != null && maskFile.Length > 0)
+            using var imageStream = imageFile.OpenReadStream();
+            using var maskStream = maskFile != null && maskFile.Length > 0 ? maskFile.OpenReadStream() : null;
+
+            var response = await imageClient.EditImageAsync(new ImageEditsRequest
             {
-                using var maskMs = new MemoryStream();
-                await maskFile.CopyToAsync(maskMs, cancellationToken).ConfigureAwait(false);
-                maskInfo = $"data:{maskFile.ContentType ?? "image/png"};base64,{Convert.ToBase64String(maskMs.ToArray())}";
-            }
+                Model = model.GetEffectiveModelCode(),
+                Prompt = prompt!,
+                Size = size,
+                ImageStream = imageStream,
+                ImageFileName = String.IsNullOrWhiteSpace(imageFile.FileName) ? "image.png" : imageFile.FileName,
+                MaskStream = maskStream,
+                MaskFileName = maskFile != null && !String.IsNullOrWhiteSpace(maskFile.FileName) ? maskFile.FileName : "mask.png",
+            }, cancellationToken).ConfigureAwait(false);
 
-            var contentParts = new List<Object>
-            {
-                new { type = "text", text = $"Edit this image: {prompt}. Size: {size}" },
-                new { type = "image_url", image_url = new { url = dataUri } },
-            };
-            if (maskInfo != null)
-                contentParts.Add(new { type = "image_url", image_url = new { url = maskInfo } });
+            return Ok(NormalizeImageEditResponse(response, prompt!));
+        }
+        catch (NotSupportedException ex)
+        {
+            return BadRequest(new { code = "MODEL_UNSUPPORTED", message = ex.Message });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return StatusCode(502, new { code = "IMAGE_EDIT_FAILED", message = ex.Message });
+        }
+    }
 
-            using var editClient = modelService.CreateClient(config)!;
-            var response = await editClient.GetResponseAsync(
-                [new AiChatMessage { Role = "user", Content = contentParts }],
-                new ChatOptions { Model = config.Code },
-                cancellationToken).ConfigureAwait(false);
+    private static Object NormalizeImageEditResponse(ImageGenerationResponse? response, String prompt)
+    {
+        var created = response?.Created > DateTime.MinValue
+            ? new DateTimeOffset(response.Created.ToUniversalTime()).ToUnixTimeSeconds()
+            : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            return Ok(new
-            {
-                created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                data = new[]
+        var data = response?.Data?.Select(item => new
+        {
+            revised_prompt = item.RevisedPrompt ?? prompt,
+            content = GetImageContent(item),
+            url = item.Url,
+            b64_json = item.B64Json,
+        }).ToArray();
+
+        return new
+        {
+            created,
+            data = data is { Length: > 0 }
+                ? data
+                : new[]
                 {
                     new
                     {
                         revised_prompt = prompt,
-                        content = response.Messages?.FirstOrDefault()?.Message?.Content,
+                        content = (String?)null,
+                        url = (String?)null,
+                        b64_json = (String?)null,
                     }
                 }
-            });
-        }
-        catch (HttpRequestException ex)
-        {
-            return StatusCode(502, new { code = "IMAGE_EDIT_FAILED", message = ex.Message });
-        }
+        };
+    }
+
+    private static String? GetImageContent(ImageData item)
+    {
+        if (!String.IsNullOrWhiteSpace(item.Content)) return item.Content;
+        if (!String.IsNullOrWhiteSpace(item.Url)) return item.Url;
+        if (!String.IsNullOrWhiteSpace(item.B64Json)) return $"data:image/png;base64,{item.B64Json}";
+
+        return null;
     }
 }

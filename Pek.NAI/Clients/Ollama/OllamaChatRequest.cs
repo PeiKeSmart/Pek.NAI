@@ -44,19 +44,7 @@ public class OllamaChatRequest : IChatRequest
     [IgnoreDataMember]
     IList<ChatMessage> IChatRequest.Messages
     {
-        get
-        {
-            if (_chatMessages == null)
-            {
-                var messages = new List<ChatMessage>();
-                foreach (var msg in Messages)
-                {
-                    messages.Add(msg.ToChatMessage());
-                }
-                _chatMessages = messages;
-            }
-            return _chatMessages;
-        }
+        get => _chatMessages ??= Messages.Select(e => e.ToChatMessage()).ToList();
         set => _chatMessages = value;
     }
 
@@ -176,7 +164,7 @@ public class OllamaChatRequest : IChatRequest
             };
 
             if (msg.ToolCalls != null && msg.ToolCalls.Count > 0)
-            {
+                {
                 var toolCalls = new List<OllamaToolCall>();
                 foreach (var tc in msg.ToolCalls)
                 {
@@ -221,13 +209,13 @@ public class OllamaChatRequest : IChatRequest
             if (request.Temperature != null) opts.Temperature = request.Temperature.Value;
             if (request.TopP != null) opts.TopP = request.TopP.Value;
             if (request.Stop != null && request.Stop.Count > 0)
-                opts.Stop = request.Stop is List<String> list ? list : new List<String>(request.Stop);
+                opts.Stop = request.Stop is List<String> list ? list : [.. request.Stop];
             result.Options = opts;
         }
 
         // 工具定义
         if (request.Tools != null && request.Tools.Count > 0)
-        {
+            {
             var tools = new List<Object>();
             foreach (var tool in request.Tools)
             {
@@ -276,7 +264,7 @@ public class OllamaChatMessage
         };
 
         if (ToolCalls != null && ToolCalls.Count > 0)
-        {
+            {
             var toolCalls = new List<ToolCall>();
             foreach (var tc in ToolCalls)
             {

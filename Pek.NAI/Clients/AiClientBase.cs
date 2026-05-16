@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using NewLife.AI.Models;
 using NewLife.Log;
 using NewLife.Reflection;
@@ -213,11 +214,39 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     /// <summary>解析流式响应字符串</summary>
     protected virtual IChatResponse? ParseChunk(String data, IChatRequest request, String? lastEvent) => ParseResponse(data, request);
 
+    /// <summary>合并同一次 LLM 调用内的 chunk Usage。
+    /// 默认策略：直接返回 incoming（适用于最后一个 chunk 含完整 Usage 的协议，如 OpenAI/DeepSeek/Bedrock/Ollama）。
+    /// 协议有差异时子类可重写此方法（如 Anthropic 拆分两个互补 chunk，Gemini 每 chunk 累积）</summary>
+    /// <param name="existing">当前已收集到的本轮 Usage，首个 chunk 时为 null</param>
+    /// <param name="incoming">当前 chunk 携带的 Usage</param>
+    /// <returns>合并后的 Usage</returns>
+    public virtual UsageDetails MergeChunkUsage(UsageDetails? existing, UsageDetails incoming) => incoming;
+
     /// <summary>设置请求头。子类可重写此方法注入认证信息</summary>
     /// <param name="request">HTTP 请求</param>
     /// <param name="chatRequest">对话请求，可为 null。子类可据此读取运行时参数（如 Model）覆盖 options 中的默认值</param>
     /// <param name="options">连接选项</param>
     protected virtual void SetHeaders(HttpRequestMessage request, IChatRequest? chatRequest, AiClientOptions options) { }
+
+    private static readonly Regex _endpointVersionRx = new Regex(@"/v\d+$", RegexOptions.Compiled);
+    private static readonly Regex _pathVersionRx = new Regex(@"^/v\d+", RegexOptions.Compiled);
+
+    /// <summary>智能拼接 API 地址与路径。若 endpoint 末尾已含版本段（如 /v1、/v2），则自动去掉 path 开头的版本前缀，避免产生 /v1/v1 或 /v2/v1 的错误路径。</summary>
+    /// <param name="endpoint">服务端点，如 https://api.openai.com 或 https://example.com/v1</param>
+    /// <param name="path">API 路径，如 /v1/chat/completions</param>
+    /// <returns>完整请求 URL</returns>
+    public static String CombineApiUrl(String endpoint, String path)
+    {
+        var base_ = endpoint.TrimEnd('/');
+        if (_endpointVersionRx.IsMatch(base_))
+            path = _pathVersionRx.Replace(path, String.Empty);
+        return base_ + path;
+    }
+
+    /// <summary>使用当前客户端端点配置拼接 API 路径。等同于 <see cref="CombineApiUrl"/> 的实例便捷方法</summary>
+    /// <param name="path">API 路径，如 /v1/chat/completions</param>
+    /// <returns>完整请求 URL</returns>
+    protected String BuildApiUrl(String path) => CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), path);
     #endregion
 
     #region Http请求

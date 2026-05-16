@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Select } from '@/components/atoms/Select'
 import { Slider } from '@/components/atoms/Slider'
+import { Toggle } from '@/components/atoms/Toggle'
 import { Icon } from '@/components/common/Icon'
 import type { ModelInfo } from '@/types'
 
@@ -13,8 +14,8 @@ interface ChatSettingsProps {
   onDefaultThinkingModeChange: (v: number) => void
   contextRounds: number
   onContextRoundsChange: (v: number) => void
-  streamingSpeed: number
-  onStreamingSpeedChange: (speed: number) => void
+  thinkingCollapsed: boolean
+  onThinkingCollapsedChange: (v: boolean) => void
   models: ModelInfo[]
 }
 
@@ -38,19 +39,11 @@ export function ChatSettings({
   onDefaultThinkingModeChange,
   contextRounds,
   onContextRoundsChange,
-  streamingSpeed,
-  onStreamingSpeedChange,
+  thinkingCollapsed,
+  onThinkingCollapsedChange,
   models,
 }: ChatSettingsProps) {
   const { t } = useTranslation()
-
-  const speedLabels: Record<number, string> = {
-    1: t('settings.speedSlow'),
-    2: t('settings.speedStandard'),
-    3: t('settings.speedBalanced'),
-    4: t('settings.speedFast'),
-    5: t('settings.speedMax'),
-  }
 
   const modelOptions = models.map((m) => ({ value: String(m.id), label: m.name }))
 
@@ -94,7 +87,7 @@ export function ChatSettings({
 
         <div className="border-b border-gray-100 dark:border-gray-800" />
 
-        {/* 4.2.2 默认思考模式 */}
+        {/* 默认思考模式 */}
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm font-medium text-gray-700 dark:text-gray-200">{t('settings.defaultThinkingMode')}</div>
@@ -109,6 +102,17 @@ export function ChatSettings({
 
         <div className="border-b border-gray-100 dark:border-gray-800" />
 
+        {/* 思考过程收缩 */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-200">{t('settings.thinkingCollapsed')}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('settings.thinkingCollapsedDesc')}</div>
+          </div>
+          <Toggle checked={thinkingCollapsed} onChange={onThinkingCollapsedChange} size="sm" />
+        </div>
+
+        <div className="border-b border-gray-100 dark:border-gray-800" />
+
         {/* 4.2.2 上下文轮数 */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -118,24 +122,6 @@ export function ChatSettings({
           <Slider value={contextRounds} onChange={onContextRoundsChange} min={1} max={30} labelLeft="1" labelRight="30" />
         </div>
 
-        <div className="border-b border-gray-100 dark:border-gray-800" />
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-200">{t('settings.streamingSpeed')}</div>
-            <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
-              {speedLabels[streamingSpeed] ?? t('settings.speedBalanced')}
-            </span>
-          </div>
-          <Slider
-            value={streamingSpeed}
-            onChange={onStreamingSpeedChange}
-            min={1}
-            max={5}
-            labelLeft={t('settings.speedSlow')}
-            labelRight={t('settings.speedMax')}
-          />
-        </div>
       </div>
     </div>
   )

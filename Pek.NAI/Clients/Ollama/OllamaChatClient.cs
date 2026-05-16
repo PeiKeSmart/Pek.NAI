@@ -1,6 +1,8 @@
 ﻿using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using NewLife.AI.Models;
+using NewLife.Remoting;
 using NewLife.Serialization;
 
 namespace NewLife.AI.Clients.Ollama;
@@ -15,6 +17,10 @@ namespace NewLife.AI.Clients.Ollama;
 /// </list>
 /// 官方文档：https://github.com/ollama/ollama/blob/main/docs/api.md
 /// </remarks>
+/// <remarks>
+/// 嵌入向量：<see cref="EmbedAsync"/> 默认使用 <see cref="DefaultEmbedModel"/>（nomic-embed-text）。
+/// 若未安装，执行 <c>ollama pull nomic-embed-text</c> 即可。
+/// </remarks>
 [AiClient("Ollama", "本地Ollama", "http://localhost:11434", Protocol = "Ollama", Description = "本地运行开源大模型，支持 Llama/Qwen/Gemma 等")]
 [AiClientModel("qwen3.5:0.8b", "Qwen 3.5 0.8B", Thinking = true)]
 [AiClientModel("qwen3:8b", "Qwen3 8B", Thinking = true)]
@@ -23,11 +29,15 @@ namespace NewLife.AI.Clients.Ollama;
 [AiClientModel("phi4", "Phi-4")]
 [AiClientModel("llava", "LLaVA", Vision = true, FunctionCalling = false)]
 [AiClientModel("gemma3", "Gemma 3", Vision = true)]
-public class OllamaChatClient : AiClientBase
+public class OllamaChatClient : AiClientBase, IModelListClient
 {
     #region 属性
     /// <inheritdoc/>
     public override String Name { get; set; } = "本地Ollama";
+
+    /// <summary>嵌入向量默认模型。nomic-embed-text 是 Ollama 官方推荐的轻量嵌入模型（~274MB，768 维）</summary>
+    /// <remarks>安装命令：<c>ollama pull nomic-embed-text</c></remarks>
+    public const String DefaultEmbedModel = "nomic-embed-text";
 
     /// <summary>默认Json序列化选项</summary>
     public static JsonOptions DefaultJsonOptions = new()
@@ -79,7 +89,7 @@ public class OllamaChatClient : AiClientBase
     #endregion
 
     #region 方法
-    /// <summary>获取本地已安装的模型列表</summary>
+    /// <summary>获取本地已安装的模型列表（原生 Ollama 格式）</summary>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>模型列表，服务不可用时返回 null</returns>
     public virtual async Task<OllamaTagsResponse?> ListModelsAsync(CancellationToken cancellationToken = default)
@@ -87,6 +97,30 @@ public class OllamaChatClient : AiClientBase
         var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/api/tags";
         var json = await TryGetAsync(url, _options, cancellationToken).ConfigureAwait(false);
         return json?.ToJsonEntity<OllamaTagsResponse>(JsonOptions);
+    }
+
+    /// <summary>获取本地已安装的模型列表（IModelListClient 标准接口实现）</summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>OpenAI 兼容格式的模型列表，服务不可用时返回 null</returns>
+    async Task<ModelListResponse?> IModelListClient.ListModelsAsync(CancellationToken cancellationToken)
+    {
+        var tags = await ListModelsAsync(cancellationToken).ConfigureAwait(false);
+        if (tags?.Models == null) return null;
+
+        var items = new ModelInfo[tags.Models.Length];
+        for (var i = 0; i < tags.Models.Length; i++)
+        {
+            var m = tags.Models[i];
+            items[i] = new ModelInfo
+            {
+                Id = m.Model ?? m.Name,
+                Name = m.Name ?? m.Model,
+                Object = "model",
+                OwnedBy = "ollama",
+            };
+        }
+
+        return new ModelListResponse { Object = "list", Data = items };
     }
 
     /// <summary>获取运行中的模型列表</summary>
@@ -128,16 +162,27 @@ public class OllamaChatClient : AiClientBase
     }
 
     /// <summary>生成嵌入向量</summary>
-    /// <param name="request">嵌入请求</param>
+    /// <param name="request">嵌入请求。未指定 Model 时依次 fallback 到客户端默认模型，最终回退到 <see cref="DefaultEmbedModel"/>（nomic-embed-text）</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>嵌入响应，服务不可用时返回 null</returns>
     public virtual async Task<OllamaEmbedResponse?> EmbedAsync(OllamaEmbedRequest request, CancellationToken cancellationToken = default)
     {
         if (request == null) throw new ArgumentNullException(nameof(request));
 
+        // 模型回退：请求未指定 → 客户端默认模型 → 内置嵌入默认模型
+        if (request.Model.IsNullOrEmpty()) request.Model = _options.Model.IsNullOrEmpty() ? DefaultEmbedModel : _options.Model;
+
         var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/api/embed";
-        var json = await PostAsync(url, request, null, _options, cancellationToken).ConfigureAwait(false);
-        return json.ToJsonEntity<OllamaEmbedResponse>(JsonOptions);
+        try
+        {
+            var json = await PostAsync(url, request, null, _options, cancellationToken).ConfigureAwait(false);
+            return json.ToJsonEntity<OllamaEmbedResponse>(JsonOptions);
+        }
+        catch (ApiException ex) when (ex.Message.Contains("does not support embeddings"))
+        {
+            throw new ApiException(400,
+                $"模型 '{request.Model}' 不支持嵌入向量生成。请改用专用嵌入模型，安装命令：ollama pull {DefaultEmbedModel}");
+        }
     }
 
     /// <summary>拉取（下载）模型。等待完成后返回最终状态</summary>
@@ -253,7 +298,7 @@ public class OllamaChatClient : AiClientBase
         }
 
         // Ollama 本地模型无法通过名称准确推断上下文长度，由 /api/show 接口补充
-        return new AiProviderCapabilities(thinking, funcCall, vision, false, false, false, 0);
+        return new AiProviderCapabilities(thinking, funcCall, vision, false, false, false, false, 0);
     }
     #endregion
 }

@@ -1,13 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using NewLife.ChatAI.Entity;
-using NewLife;
-using NewLife.Cube;
+﻿using NewLife.Cube;
 using NewLife.Cube.Extensions;
-using NewLife.Cube.ViewModels;
-using NewLife.Log;
 using NewLife.Web;
 using XCode.Membership;
-using static NewLife.ChatAI.Entity.UsageRecord;
 
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
@@ -21,6 +15,7 @@ public class UsageRecordController : ChatEntityController<UsageRecord>
         //LogOnChange = true;
 
         ListFields.RemoveField("Id", "MessageId", "ModelId");
+        ListFields.RemoveField("ReasoningTokens", "InputAudioTokens", "InputTextTokens", "OutputAudioTokens", "OutputTextTokens");
         ListFields.RemoveCreateField().RemoveRemarkField();
 
         //{
@@ -51,10 +46,13 @@ public class UsageRecordController : ChatEntityController<UsageRecord>
         var appKeyId = p["appKeyId"].ToInt(-1);
         var conversationId = p["conversationId"].ToLong(-1);
         var modelId = p["modelId"].ToInt(-1);
+        var source = p["source"];
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return UsageRecord.Search(userId, appKeyId, conversationId, modelId, start, end, p["Q"], p);
+        if (userId > 0 || appKeyId > 0 || conversationId > 0 || modelId > 0) p.RetrieveState = true;
+
+        return UsageRecord.Search(userId, appKeyId, conversationId, modelId, source, start, end, p["Q"], p);
     }
 }

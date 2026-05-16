@@ -1,12 +1,103 @@
-﻿using NewLife.AI.Models;
-
-namespace NewLife.ChatAI.Models;
+﻿namespace NewLife.ChatAI.Models;
 
 /// <summary>模型信息</summary>
-public record ModelInfoDto(Int32 Id, String Code, String Name, Boolean SupportThinking, Boolean SupportFunctionCalling, Boolean SupportVision, Boolean SupportAudio, Boolean SupportImageGeneration, Boolean SupportVideoGeneration, Int32 ContextLength = 0, String Provider = "");
+public record ModelInfoDto(Int32 Id, String Code, String Name, Boolean SupportThinking, Boolean SupportFunction, Boolean SupportVision, Boolean SupportAudio, Boolean SupportImage, Boolean SupportVideo, Boolean SupportEmbedding = false, Int32 ContextLength = 0, String Provider = "");
 
-/// <summary>工具调用信息</summary>
-public record ToolCallDto(String Id, String Name, ToolCallStatus Status, String? Arguments = null, String? Result = null);
+#region 提供商管理 DTO
+/// <summary>提供商配置（管理视图）。ApiKey 已脱敏</summary>
+public class ProviderDto
+{
+    /// <summary>编号</summary>
+    public Int32 Id { get; set; }
+    /// <summary>编码</summary>
+    public String Code { get; set; } = "";
+    /// <summary>名称</summary>
+    public String Name { get; set; } = "";
+    /// <summary>实现类描述符（如 OpenAI、Anthropic）</summary>
+    public String Provider { get; set; } = "";
+    /// <summary>接口地址</summary>
+    public String Endpoint { get; set; } = "";
+    /// <summary>脱敏密钥（前4位***后4位，无密钥时为空）</summary>
+    public String ApiKeyMasked { get; set; } = "";
+    /// <summary>启用</summary>
+    public Boolean Enable { get; set; }
+    /// <summary>排序</summary>
+    public Int32 Sort { get; set; }
+    /// <summary>备注</summary>
+    public String Remark { get; set; } = "";
+}
+
+/// <summary>提供商更新请求。仅允许修改 Enable/ApiKey/Remark 三个字段</summary>
+public class ProviderUpdateDto
+{
+    /// <summary>启用</summary>
+    public Boolean Enable { get; set; }
+    /// <summary>新密钥，为空时保持不变</summary>
+    public String? ApiKey { get; set; }
+    /// <summary>备注</summary>
+    public String? Remark { get; set; }
+}
+#endregion
+
+#region 模型管理 DTO
+/// <summary>模型配置（管理视图）。含提供商名称及启停状态</summary>
+public class ModelManageDto
+{
+    /// <summary>编号</summary>
+    public Int32 Id { get; set; }
+    /// <summary>所属提供商 ID</summary>
+    public Int32 ProviderId { get; set; }
+    /// <summary>所属提供商名称</summary>
+    public String ProviderName { get; set; } = "";
+    /// <summary>模型编码</summary>
+    public String Code { get; set; } = "";
+    /// <summary>显示名称</summary>
+    public String Name { get; set; } = "";
+    /// <summary>启用</summary>
+    public Boolean Enable { get; set; }
+    /// <summary>排序</summary>
+    public Int32 Sort { get; set; }
+    /// <summary>上下文长度（Token）</summary>
+    public Int32 ContextLength { get; set; }
+    /// <summary>支持思考模式</summary>
+    public Boolean SupportThinking { get; set; }
+    /// <summary>支持函数调用</summary>
+    public Boolean SupportFunction { get; set; }
+    /// <summary>支持视觉（图片输入）</summary>
+    public Boolean SupportVision { get; set; }
+    /// <summary>支持音频</summary>
+    public Boolean SupportAudio { get; set; }
+    /// <summary>支持文生图</summary>
+    public Boolean SupportImage { get; set; }
+    /// <summary>支持文生视频</summary>
+    public Boolean SupportVideo { get; set; }
+    /// <summary>支持嵌入向量</summary>
+    public Boolean SupportEmbedding { get; set; }
+}
+
+/// <summary>模型设置更新请求。含 Enable 及特性标记</summary>
+public class ModelSettingsDto
+{
+    /// <summary>启用</summary>
+    public Boolean Enable { get; set; }
+    /// <summary>上下文长度（Token）</summary>
+    public Int32 ContextLength { get; set; }
+    /// <summary>支持思考模式</summary>
+    public Boolean SupportThinking { get; set; }
+    /// <summary>支持函数调用</summary>
+    public Boolean SupportFunction { get; set; }
+    /// <summary>支持视觉（图片输入）</summary>
+    public Boolean SupportVision { get; set; }
+    /// <summary>支持音频</summary>
+    public Boolean SupportAudio { get; set; }
+    /// <summary>支持文生图</summary>
+    public Boolean SupportImage { get; set; }
+    /// <summary>支持文生视频</summary>
+    public Boolean SupportVideo { get; set; }
+    /// <summary>支持嵌入向量</summary>
+    public Boolean SupportEmbedding { get; set; }
+}
+#endregion
 
 /// <summary>会话摘要</summary>
 public record ConversationSummaryDto(Int64 Id, String Title, Int32 ModelId, DateTime LastMessageTime, Boolean IsPinned)
@@ -16,28 +107,6 @@ public record ConversationSummaryDto(Int64 Id, String Title, Int32 ModelId, Date
 
     /// <summary>图标颜色</summary>
     public String? IconColor { get; set; }
-};
-
-/// <summary>消息数据</summary>
-public record MessageDto(Int64 Id, Int64 ConversationId, String Role, String Content, String? ThinkingContent, ThinkingMode ThinkingMode, String? Attachments, DateTime CreateTime)
-{
-    /// <summary>消息状态</summary>
-    public MessageStatus Status { get; set; } = MessageStatus.Done;
-
-    /// <summary>工具调用列表</summary>
-    public IReadOnlyList<ToolCallDto>? ToolCalls { get; set; }
-
-    /// <summary>输入Token数</summary>
-    public Int32 InputTokens { get; set; }
-
-    /// <summary>输出Token数</summary>
-    public Int32 OutputTokens { get; set; }
-
-    /// <summary>总Token数</summary>
-    public Int32 TotalTokens { get; set; }
-
-    /// <summary>反馈类型。Like=1, Dislike=2, 0=无反馈</summary>
-    public Int32 FeedbackType { get; set; }
 };
 
 /// <summary>附件信息</summary>
@@ -64,14 +133,12 @@ public record UserSettingsDto(String Language, String Theme, Int32 FontSize, Str
     /// <summary>启用个人学习。用户级自学习开关，全局开关开启后此项生效</summary>
     public Boolean EnableLearning { get; set; } = true;
 
-    /// <summary>学习模型。用户自选的记忆提取模型，为空则使用系统配置</summary>
-    public String LearningModel { get; set; } = String.Empty;
-
-    /// <summary>记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置</summary>
-    public Int32 MemoryInjectNum { get; set; } = 0;
 
     /// <summary>内容区宽度。小屏800/标准960/宽屏1200，按范围匹配：&lt;960 小屏，&gt;=1200 宽屏，其余标准。0表示未设置，等效标准屏</summary>
     public Int32 ContentWidth { get; set; } = 0;
+
+    /// <summary>思考过程收缩。默认是否收缩展示思考过程，默认展开</summary>
+    public Boolean ThinkingCollapsed { get; set; }
 };
 
 /// <summary>用户角色信息</summary>
@@ -104,6 +171,9 @@ public class SystemConfigDto
     /// <summary>Logo地址。欢迎页自定义Logo图片URL</summary>
     public String? LogoUrl { get; set; }
 
+    /// <summary>欢迎语。欢迎页大标题，为空时前端使用默认文案</summary>
+    public String? WelcomeMessage { get; set; }
+
     /// <summary>欢迎页推荐问题列表</summary>
     public SuggestedQuestionDto[] SuggestedQuestions { get; set; } = [];
 }
@@ -111,6 +181,9 @@ public class SystemConfigDto
 /// <summary>推荐问题信息</summary>
 public class SuggestedQuestionDto
 {
+    /// <summary>标题。欢迎页按钮显示的短标题</summary>
+    public String? Title { get; set; }
+
     /// <summary>问题文本</summary>
     public String Question { get; set; } = "";
 

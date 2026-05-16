@@ -1,28 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Runtime.Serialization;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web;
-using System.Web.Script.Serialization;
-using System.Xml.Serialization;
-using NewLife;
 using NewLife.Data;
 using NewLife.Log;
-using NewLife.Model;
-using NewLife.Reflection;
-using NewLife.Threading;
-using NewLife.Web;
 using XCode;
-using XCode.Cache;
-using XCode.Configuration;
-using XCode.DataAccessLayer;
 using XCode.Membership;
-using XCode.Shards;
 
 namespace NewLife.ChatAI.Entity;
 
@@ -52,13 +31,13 @@ public partial class UserMemory : Entity<UserMemory>
     #endregion
 
     #region 扩展属性
-    /// <summary>来源会话</summary>
-    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
-    public Conversation Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
+    ///// <summary>来源会话</summary>
+    //[XmlIgnore, IgnoreDataMember, ScriptIgnore]
+    //public Conversation Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
 
-    /// <summary>来源会话</summary>
-    [Map(nameof(ConversationId), typeof(Conversation), "Id")]
-    public String ConversationTitle => Conversation?.Title;
+    ///// <summary>来源会话</summary>
+    //[Map(nameof(ConversationId), typeof(Conversation), "Id")]
+    //public String ConversationTitle => Conversation?.Title;
     #endregion
 
     #region 扩展查询
@@ -103,6 +82,21 @@ public partial class UserMemory : Entity<UserMemory>
     /// <param name="count">最大返回数</param>
     /// <returns></returns>
     public static IList<UserMemory> FindPendingReview(Int32 count = 50) => FindAll(_.Status == 0 & _.Enable == true, _.Id.Asc(), null, 0, count);
+
+    /// <summary>分页查询用户有效记忆，支持分类过滤；PageParameter.TotalCount 将被填充总行数</summary>
+    /// <param name="userId">用户编号</param>
+    /// <param name="category">分类过滤，为空时不过滤</param>
+    /// <param name="page">分页参数；设置 RetrieveTotalCount=true 时自动回填 TotalCount</param>
+    /// <returns>当前页记忆列表</returns>
+    public static IList<UserMemory> Search(Int32 userId, String? category, PageParameter page)
+    {
+        var exp = _.UserId == userId & _.Enable == true;
+        if (!category.IsNullOrEmpty()) exp &= _.Category == category;
+
+        page.Sort = _.Confidence.Desc();
+
+        return FindAll(exp, page);
+    }
     #endregion
 
     #region 业务操作

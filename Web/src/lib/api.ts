@@ -152,7 +152,7 @@ function toConversation(dto: ConversationDto): Conversation {
 }
 
 export async function fetchConversations(page = 1, pageSize = 50, keyword?: string): Promise<Conversation[]> {
-  const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  const params = new URLSearchParams({ pageIndex: String(page), pageSize: String(pageSize) })
   if (keyword?.trim()) params.set('keyword', keyword.trim())
   const result = await request<PagedResult<ConversationDto>>(
     `/api/conversations?${params}`,
@@ -172,7 +172,7 @@ export interface MessageSearchResult {
 
 /** 全文搜索消息内容 */
 export async function searchMessages(keyword: string, page = 1, pageSize = 20): Promise<PagedResult<MessageSearchResult>> {
-  const params = new URLSearchParams({ keyword, page: String(page), pageSize: String(pageSize) })
+  const params = new URLSearchParams({ keyword, pageIndex: String(page), pageSize: String(pageSize) })
   return request<PagedResult<MessageSearchResult>>(`/api/messages/search?${params}`)
 }
 
@@ -270,7 +270,7 @@ export async function fetchMessages(conversationId: string): Promise<Message[]> 
 // ── SSE Streaming ──
 
 export interface ChatStreamEvent {
-  type: 'message_start' | 'thinking_delta' | 'thinking_done' | 'content_delta' | 'artifact_start' | 'artifact_delta' | 'artifact_end' | 'tool_call_start' | 'tool_call_done' | 'tool_call_error' | 'message_done' | 'error'
+  type: 'message_start' | 'thinking_delta' | 'thinking_done' | 'content_delta' | 'tool_call_start' | 'tool_call_done' | 'tool_call_error' | 'message_done' | 'error'
   messageId?: string
   model?: string
   thinkingMode?: number
@@ -290,7 +290,6 @@ export interface ChatStreamEvent {
     totalTokens?: number
   }
   title?: string
-  artifactType?: string
 }
 
 export async function streamMessage(
@@ -392,11 +391,11 @@ interface ModelInfoDto {
   name: string
   provider?: string
   supportThinking: boolean
-  supportFunctionCalling: boolean
+  supportFunction: boolean
   supportVision: boolean
   supportAudio: boolean
-  supportImageGeneration: boolean
-  supportVideoGeneration: boolean
+  supportImage: boolean
+  supportVideo: boolean
   contextLength: number
 }
 
@@ -408,11 +407,11 @@ export async function fetchModels(): Promise<ModelInfo[]> {
     name: d.name,
     provider: d.provider || undefined,
     supportThinking: d.supportThinking,
-    supportFunctionCalling: d.supportFunctionCalling,
+    supportFunction: d.supportFunction,
     supportVision: d.supportVision,
     supportAudio: d.supportAudio,
-    supportImageGeneration: d.supportImageGeneration,
-    supportVideoGeneration: d.supportVideoGeneration,
+    supportImage: d.supportImage,
+    supportVideo: d.supportVideo,
     contextLength: d.contextLength || undefined,
   }))
 }
@@ -436,6 +435,8 @@ interface UserSettingsDto {
   showToolCalls: boolean
   streamingSpeed: number
   contentWidth: number
+  thinkingCollapsed?: boolean
+  enableLearning: boolean
 }
 
 function toUserSettings(dto: UserSettingsDto): UserSettings {
@@ -453,9 +454,10 @@ function toUserSettings(dto: UserSettingsDto): UserSettings {
     systemPrompt: dto.systemPrompt,
     mcpEnabled: dto.mcpEnabled,
     showToolCalls: dto.showToolCalls ?? false,
-    streamingSpeed: dto.streamingSpeed,
     allowTraining: dto.allowTraining,
     contentWidth: dto.contentWidth || 960,
+    thinkingCollapsed: dto.thinkingCollapsed ?? false,
+    enableLearning: dto.enableLearning ?? true,
   }
 }
 
@@ -482,8 +484,9 @@ export async function saveUserSettings(settings: UserSettings): Promise<UserSett
       allowTraining: settings.allowTraining ?? false,
       mcpEnabled: settings.mcpEnabled,
       showToolCalls: settings.showToolCalls ?? false,
-      streamingSpeed: settings.streamingSpeed,
       contentWidth: settings.contentWidth ?? 960,
+      thinkingCollapsed: settings.thinkingCollapsed ?? false,
+      enableLearning: settings.enableLearning ?? true,
     }),
   })
   return toUserSettings(dto)
@@ -694,6 +697,7 @@ export async function fetchModelUsage(): Promise<ModelUsage[]> {
 // ── System Config ──
 
 export interface SuggestedQuestion {
+  title?: string
   question: string
   icon?: string
   color?: string
@@ -702,6 +706,8 @@ export interface SuggestedQuestion {
 export interface SystemConfig {
   appName: string
   siteTitle: string
+  /** 欢迎语。欢迎页大标题，空值时前端使用默认文案 */
+  welcomeMessage?: string
   suggestedQuestions: SuggestedQuestion[]
 }
 
@@ -716,6 +722,8 @@ export interface SystemSettings {
   name: string
   siteTitle: string
   logoUrl: string
+  /** 欢迎语。欢迎页大标题，空值时前端使用默认文案 */
+  welcomeMessage: string
   autoGenerateTitle: boolean
   // 对话默认
   defaultModel: number
@@ -729,7 +737,6 @@ export interface SystemSettings {
   shareExpireDays: number
   // 网关
   enableGateway: boolean
-  enableGatewayPipeline: boolean
   gatewayRateLimit: number
   upstreamRetryCount: number
   enableGatewayRecording: boolean
@@ -822,16 +829,14 @@ export interface MemoryItem {
 
 export interface MemoryList {
   total: number
-  page: number
+  pageIndex: number
   pageSize: number
   items: MemoryItem[]
 }
 
-export async function fetchMemories(category?: string, page = 1, pageSize = 20): Promise<MemoryList> {
-  const params = new URLSearchParams()
+export async function fetchMemories(pageIndex = 1, pageSize = 20, category?: string): Promise<MemoryList> {
+  const params = new URLSearchParams({ pageIndex: String(pageIndex), pageSize: String(pageSize) })
   if (category) params.set('category', category)
-  params.set('page', String(page))
-  params.set('pageSize', String(pageSize))
   return request<MemoryList>(`/api/memory?${params}`)
 }
 
@@ -930,3 +935,46 @@ export async function deleteAppKey(id: number): Promise<void> {
   await request<void>(`/api/appkeys/${id}`, { method: 'DELETE' })
 }
 
+
+// -- Providers & Models Management (admin only) --
+
+export async function fetchProviders(): Promise<import('@/types').ProviderItem[]> {
+  return request<import('@/types').ProviderItem[]>('/api/providers')
+}
+
+export async function updateProvider(
+  id: number,
+  data: { enable?: boolean; apiKey?: string; remark?: string },
+): Promise<import('@/types').ProviderItem> {
+  return request<import('@/types').ProviderItem>(`/api/providers/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function refreshProviderModels(id: number): Promise<void> {
+  await request<void>(`/api/providers/${id}/refresh`, { method: 'POST' })
+}
+
+export async function fetchModelsManage(): Promise<import('@/types').ModelManageItem[]> {
+  return request<import('@/types').ModelManageItem[]>('/api/models/manage')
+}
+
+export async function updateModelSettings(
+  id: number,
+  data: {
+    enable?: boolean
+    contextLength?: number
+    supportThinking?: boolean
+    supportFunction?: boolean
+    supportVision?: boolean
+    supportAudio?: boolean
+    supportImage?: boolean
+    supportVideo?: boolean
+  },
+): Promise<void> {
+  await request<void>(`/api/models/${id}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}

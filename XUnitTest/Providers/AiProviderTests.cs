@@ -262,14 +262,14 @@ public class AiProviderTests
     public void AllDescriptors_HaveNonEmptyDisplayName()
     {
         Assert.All(AiClientRegistry.Default.Descriptors.Values,
-            d => Assert.False(String.IsNullOrWhiteSpace(d.DisplayName)));
+            d => Assert.NotEmpty(d.DisplayName));
     }
 
     [Fact]
     public void AllDescriptors_HaveNonEmptyEndpoint()
     {
         Assert.All(AiClientRegistry.Default.Descriptors.Values,
-            d => Assert.False(String.IsNullOrWhiteSpace(d.DefaultEndpoint)));
+            d => Assert.NotEmpty(d.DefaultEndpoint));
     }
 
     [Fact]
@@ -415,8 +415,8 @@ public class AiProviderTests
         // qwen3.5-plus 支持思考模式、视觉，不支持文生图，支持函数调用
         Assert.True(qwenPlus.Capabilities!.SupportThinking);
         Assert.True(qwenPlus.Capabilities.SupportVision);
-        Assert.False(qwenPlus.Capabilities.SupportImageGeneration);
-        Assert.True(qwenPlus.Capabilities.SupportFunctionCalling);
+        Assert.False(qwenPlus.Capabilities.SupportImage);
+        Assert.True(qwenPlus.Capabilities.SupportFunction);
     }
 
     [Fact]
@@ -429,9 +429,9 @@ public class AiProviderTests
         var caps = client.InferModelCapabilities("qwen3.6-plus");
         Assert.NotNull(caps);
         Assert.True(caps!.SupportThinking);
-        Assert.True(caps.SupportFunctionCalling);
+        Assert.True(caps.SupportFunction);
         Assert.True(caps.SupportVision);
-        Assert.False(caps.SupportImageGeneration);
+        Assert.False(caps.SupportImage);
     }
 
     [Theory]
@@ -474,20 +474,25 @@ public class AiProviderTests
     [InlineData("wanx-v1", false, false, false, false, true, false)]
     [InlineData("wan2.6-t2i", false, false, false, false, true, false)]
     [InlineData("qwen-image-plus", false, false, false, false, true, false)]
+    [InlineData("qwen-image", false, false, false, false, true, false)]
+    [InlineData("qwen-image-max", false, false, false, false, true, false)]
+    [InlineData("qwen-image-2.0", false, false, false, false, true, false)]
+    [InlineData("qwen-image-2.0-pro", false, false, false, false, true, false)]
+    [InlineData("qwen-image-2.0-pro-2026-03-03", false, false, false, false, true, false)]
     [InlineData("z-image-turbo", false, false, false, false, true, false)]
     // 文生视频 / 图生视频
-    [InlineData("wan2.1-t2v-turbo", false, false, false, false, false, true)]
+    [InlineData("wan2.7-t2v", false, false, false, false, false, true)]
     [InlineData("wan2.1-t2v-plus", false, false, false, false, false, true)]
-    [InlineData("wan2.1-i2v-turbo", false, false, false, false, false, true)]
+    [InlineData("wan2.7-i2v", false, false, false, false, false, true)]
     [InlineData("wan2.1-i2v-plus", false, false, false, false, false, true)]
     // 非对话模型
     [InlineData("text-embedding-v4", false, false, false, false, false, false)]
     [InlineData("cosyvoice-v3-plus", false, false, false, false, false, false)]
     [InlineData("fun-asr-realtime", false, false, false, false, false, false)]
-    [InlineData("qwen-audio-turbo", false, false, false, false, false, false)]
     // omni 全模态
+    [InlineData("qwen-omni-turbo", false, false, true, true, false, false)]
     [InlineData("qwen3.5-omni-plus", false, false, true, true, false, false)]
-    [InlineData("qwen3-omni-flash", false, false, true, true, false, false)]
+    [InlineData("qwen3-omni-flash", true, false, true, true, false, false)]
     // 专用模型不支持函数调用
     [InlineData("farui-plus", false, false, false, false, false, false)]
     [InlineData("qwen-mt-plus", false, false, false, false, false, false)]
@@ -499,11 +504,11 @@ public class AiProviderTests
         var caps = client.InferModelCapabilities(modelId);
         Assert.NotNull(caps);
         Assert.Equal(expectThinking, caps!.SupportThinking);
-        Assert.Equal(expectFuncCall, caps.SupportFunctionCalling);
+        Assert.Equal(expectFuncCall, caps.SupportFunction);
         Assert.Equal(expectVision, caps.SupportVision);
         Assert.Equal(expectAudio, caps.SupportAudio);
-        Assert.Equal(expectImageGen, caps.SupportImageGeneration);
-        Assert.Equal(expectVideoGen, caps.SupportVideoGeneration);
+        Assert.Equal(expectImageGen, caps.SupportImage);
+        Assert.Equal(expectVideoGen, caps.SupportVideo);
     }
 
     #endregion

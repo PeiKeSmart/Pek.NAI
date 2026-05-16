@@ -4,12 +4,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using NewLife.AI.Filters;
-using NewLife.AI.Services;
 using NewLife.AI.Tools;
-using NewLife.ChatAI.Entity;
 using NewLife.ChatAI.Filters;
-using NewLife.ChatAI.Services;
+using NewLife.ChatAI.Handlers;
+using NewLife.ChatAI.Tools;
 using NewLife.Cube.Extensions;
+using NewLife.Serialization;
 
 namespace NewLife.ChatAI;
 
@@ -33,16 +33,33 @@ public static class ChatAIExtensions
     public static IServiceCollection AddChatAI(this IServiceCollection services)
     {
         services.AddScoped<ChatApplicationService>();
-        services.AddScoped<MessageService>();
+        services.AddScoped<IMessageFlow, MessageService>();
+        services.AddSingleton<IChatSetting>(_ => ChatSetting.Current);
+        services.AddSingleton(_ => ChatSetting.Current);
         services.AddSingleton<SkillService>();
         services.AddSingleton<UsageService>();
         services.AddSingleton<ModelService>();
         services.AddSingleton<GatewayService>();
+        services.AddSingleton<GatewayMessageFlow>();
 
-        // 对话执行管道：将能力扩展层（工具调用、技能注入）与知识进化层（记忆注入、自学习、事件智能体）装配为统一执行入口
-        // ChatApplicationService 通过 IChatPipeline 驱动执行，对各层实现细节保持透明
-        // IEnumerable<IToolProvider> 由 DI 自动聚合所有注册的 IToolProvider 实现（DbToolProvider、McpClientService 等）
-        services.AddSingleton<IChatPipeline, ChatAIPipeline>();
+        // IChatHandler 三段式调用链（OnBefore 正序、核心 LLM 在 MessageFlow.InvokeLlmAsync、OnAfter 正序）
+        // OnBefore 与 OnAfter 均按注册顺序正序执行，顺序意义：见 Doc/L2-IChatHandler架构.md
+        services.AddSingleton<IChatHandler, SuggestedCacheHandler>();   // 1. OnBefore 命中缓存时 Interceptor 短路 LLM
+        services.AddSingleton<IChatHandler, SkillActivationHandler>();  // 2. OnBefore 技能解析与注入 / OnAfter 技能计数
+        services.AddSingleton<IChatHandler, TitleGenerationHandler>();  // 3. OnBefore 异步生成标题（与 LLM 并行）
+        services.AddSingleton<IChatHandler, LearningHandler>();         // 4. OnBefore 注入记忆 / OnAfter 自学习分析（火焰即忘）
+        services.AddSingleton<IChatHandler, UsageRecordHandler>();      // 5. OnAfter 用量入库
+        services.AddSingleton<IChatHandler, PersistMessageHandler>();   // 6. OnAfter 最后落库消息/会话
+
+        // Web UI 主调用链：收集全部已注册的 IChatHandler，按 [ChatHandlerOrder] 特性构建有序视图
+        // TryAdd 语义：上层项目已注册时不重复注册
+        services.TryAddSingleton(sp => new ChatHandlerChain(sp.GetServices<IChatHandler>()));
+
+        // 网关专属调用链：仅含用量记录（无 UI 专属的技能/知识库/持久化处理器）
+        // 复用主链路中已实例化的同一批 Handler 单例，无重复创建
+        services.TryAddSingleton<GatewayChatHandlerChain>(sp =>
+            new GatewayChatHandlerChain(sp.GetServices<IChatHandler>()
+                .Where(h => h is UsageRecordHandler)));
 
         // 工具服务注册（工具提供者实现）
         RegisterToolServices(services);
@@ -50,15 +67,15 @@ public static class ChatAIExtensions
         // 原生 .NET 工具注册（通过配置器模式，支持外部项目追加工具）
         services.ConfigureToolRegistry((sp, registry) =>
         {
-            registry.AddTools(new HolidayToolService());
-            registry.AddTools(new BuiltinToolService());
-            registry.AddTools(new NetworkToolService(sp));
-            registry.AddTools(new CurrentUserTool());
+            registry.AddTools<HolidayToolService>();
+            registry.AddTools<BuiltinToolService>();
+            registry.AddTools<NetworkToolService>();
+            registry.AddTools<CurrentUserTool>();
         });
 
         services.TryAddSingleton(sp =>
         {
-            var registry = new ToolRegistry();
+            var registry = new ToolRegistry { ServiceProvider = sp };
             foreach (var cfg in sp.GetServices<ToolRegistryConfigurator>())
             {
                 cfg.Configure(sp, registry);
@@ -73,10 +90,6 @@ public static class ChatAIExtensions
         services.AddSingleton<BackgroundGenerationService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<ConversationAnalysisService>();
-        services.AddSingleton<IChatFilter, LearningFilter>();
-        services.AddSingleton<ModelDiscoveryService>();
-        services.AddHostedService(p => p.GetRequiredService<ModelDiscoveryService>());
-        services.AddHostedService<NativeToolSyncService>();
         services.AddHttpClient("McpClient");
 
         // 消息频率限制器
@@ -89,9 +102,11 @@ public static class ChatAIExtensions
             {
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             };
-            NewLife.Serialization.SystemJson.Apply(defaultJsonOptions, true);
+            SystemJson.Apply(defaultJsonOptions, true);
             options.InputFormatters.Insert(0, new GatewayJsonInputFormatter(defaultJsonOptions));
         });
+
+        services.AddHostedService<DataPreloadService>();
 
         return services;
     }
@@ -121,7 +136,7 @@ public static class ChatAIExtensions
     {
         // 嵌入在 DLL 中的 wwwroot 文件，作为静态资源
         var env = app.Environment;
-        var assembly = typeof(ChatAiStaticFilesService).Assembly;
+        var assembly = typeof(ChatAIExtensions).Assembly;
         var embeddedProvider = new CubeEmbeddedFileProvider(assembly, "NewLife.ChatAI.wwwroot");
 
         if (!env.WebRootPath.IsNullOrEmpty() && Directory.Exists(env.WebRootPath) && env.WebRootFileProvider != null)

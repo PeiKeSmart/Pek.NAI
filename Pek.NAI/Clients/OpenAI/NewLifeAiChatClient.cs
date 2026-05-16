@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using NewLife.AI.Clients.Anthropic;
 using NewLife.AI.Clients.Gemini;
+using NewLife.AI.Models;
 using NewLife.Remoting;
 using NewLife.Serialization;
 
@@ -19,7 +20,7 @@ namespace NewLife.AI.Clients.OpenAI;
 /// <param name="options">连接选项（Endpoint、ApiKey、Model 等）</param>
 [AiClient("NewLifeAI", "新生命AI", "https://ai.newlifex.com", Description = "新生命团队星语 AI 网关，统一对接多种大模型")]
 [AiClientModel("qwen3.5-flash", "Qwen3.5 Flash", Thinking = true)]
-public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(options)
+public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(options), IRerankClient
 {
     #region 属性
     /// <inheritdoc/>
@@ -60,7 +61,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
     {
         request.Stream = false;
         var body = request is AnthropicRequest ar ? ar : AnthropicRequest.FromChatRequest(request);
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/v1/messages";
+        var url = BuildApiUrl("/v1/messages");
 
         var responseText = await PostAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         var resp = responseText.ToJsonEntity<AnthropicResponse>(JsonOptions)!;
@@ -76,7 +77,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
     {
         request.Stream = true;
         var body = request is AnthropicRequest ar ? ar : AnthropicRequest.FromChatRequest(request);
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/v1/messages";
+        var url = BuildApiUrl("/v1/messages");
 
         using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -114,7 +115,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
         // Gemini 协议使用 camelCase（如 systemInstruction/generationConfig），必须用 Gemini 专用 JsonOptions 序列化，
         // 不能使用父类的 SnakeCaseLower JsonOptions，否则字段名不匹配导致网关解析失败
         var bodyJson = JsonHost.Write(body, GeminiChatClient.DefaultJsonOptions)!;
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/v1/gemini";
+        var url = BuildApiUrl("/v1/gemini");
 
         var responseText = await PostAsync(url, bodyJson, request, _options, cancellationToken).ConfigureAwait(false);
         // 同理，Gemini 响应字段（candidates/finishReason/usageMetadata）也是 camelCase，需用 Gemini JsonOptions 反序列化
@@ -133,7 +134,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
         var body = request is GeminiRequest gr ? gr : GeminiRequest.FromChatRequest(request);
         // Gemini 协议使用 camelCase，必须用 Gemini 专用 JsonOptions 序列化，避免 snake_case 与网关期望格式不匹配
         var bodyJson = JsonHost.Write(body, GeminiChatClient.DefaultJsonOptions)!;
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/v1/gemini";
+        var url = BuildApiUrl("/v1/gemini");
 
         using var httpResponse = await PostStreamAsync(url, bodyJson, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -193,7 +194,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
         if (request == null) throw new ArgumentNullException(nameof(request));
         if (String.IsNullOrWhiteSpace(request.Prompt)) throw new ArgumentNullException(nameof(request));
 
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/v1/images/edits";
+        var url = BuildApiUrl("/v1/images/edits");
 
         using var form = new MultipartFormDataContent();
         form.Add(new StringContent(request.Prompt), "prompt");
@@ -248,13 +249,83 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
         => SubmitVideoGenerationAsync(new VideoGenerationRequest { Prompt = prompt, Model = model, Size = size }, cancellationToken);
     #endregion
 
+    #region 重排序（/v1/reranks）
+    /// <summary>文档重排序。POST /v1/reranks，OpenAI 兼容格式（与 DashScope 兼容模式相同）</summary>
+    /// <param name="request">重排请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>重排响应</returns>
+    public virtual async Task<RerankResponse> RerankAsync(RerankRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null) throw new ArgumentNullException(nameof(request));
+        if (String.IsNullOrEmpty(request.Query)) throw new ArgumentException("Query 不能为空", nameof(request));
+
+        var url = BuildApiUrl("/v1/reranks");
+
+        var dic = new Dictionary<String, Object>
+        {
+            ["model"] = request.Model ?? _options.Model ?? "gte-rerank",
+            ["query"] = request.Query,
+            ["documents"] = request.Documents,
+            ["return_documents"] = request.ReturnDocuments,
+        };
+        if (request.TopN.HasValue) dic["top_n"] = request.TopN.Value;
+
+        var json = await PostAsync(url, dic, null, _options, cancellationToken).ConfigureAwait(false);
+        return ParseRerankResponse(json);
+    }
+
+    /// <summary>解析 /v1/reranks 响应（OpenAI 兼容格式）</summary>
+    /// <param name="json">响应 JSON</param>
+    /// <returns>重排响应</returns>
+    protected virtual RerankResponse ParseRerankResponse(String json)
+    {
+        var dic = JsonParser.Decode(json);
+        var resp = new RerankResponse();
+        if (dic == null) return resp;
+
+        resp.RequestId = dic["request_id"] as String ?? dic["id"] as String;
+        if (dic["results"] is IList<Object> list)
+        {
+            foreach (var item in list)
+            {
+                if (item is not IDictionary<String, Object> d) continue;
+                var r = new RerankResult
+                {
+                    Index = d.TryGetValue("index", out var idx) ? idx.ToInt() : 0,
+                    RelevanceScore = d.TryGetValue("relevance_score", out var sc) ? sc.ToDouble() : 0,
+                };
+                if (d.TryGetValue("document", out var doc))
+                {
+                    r.Document = doc switch
+                    {
+                        String s => s,
+                        IDictionary<String, Object> dd when dd.TryGetValue("text", out var tx) => tx as String,
+                        _ => null,
+                    };
+                }
+                resp.Results.Add(r);
+            }
+        }
+
+        if (dic["usage"] is IDictionary<String, Object> usage)
+        {
+            resp.Usage = new RerankUsage
+            {
+                TotalTokens = usage.TryGetValue("total_tokens", out var tt) ? tt.ToInt() : 0,
+            };
+        }
+
+        return resp;
+    }
+    #endregion
+
     #region 辅助
     /// <summary>以指定路径发起非流式对话请求</summary>
     protected async Task<IChatResponse> ChatViaPathAsync(IChatRequest request, String path, CancellationToken cancellationToken)
     {
         request.Stream = false;
         var body = BuildRequest(request);
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + path;
+        var url = BuildApiUrl(path);
 
         var responseText = await PostAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         return ParseResponse(responseText, request);
@@ -265,7 +336,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
     {
         request.Stream = true;
         var body = BuildRequest(request);
-        var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + path;
+        var url = BuildApiUrl(path);
 
         using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);

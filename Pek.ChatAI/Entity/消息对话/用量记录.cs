@@ -21,6 +21,7 @@ namespace NewLife.ChatAI.Entity;
 [BindIndex("IX_UsageRecord_AppKeyId_Id", false, "AppKeyId,Id")]
 [BindIndex("IX_UsageRecord_ModelId_Id", false, "ModelId,Id")]
 [BindIndex("IX_UsageRecord_ConversationId", false, "ConversationId")]
+[BindIndex("IX_UsageRecord_Source_Id", false, "Source,Id")]
 [BindTable("UsageRecord", Description = "用量记录。每次AI调用的Token消耗，支持按用户和AppKey双维度统计", ConnName = "ChatAI", DbType = DatabaseType.None)]
 public partial class UsageRecord
 {
@@ -162,11 +163,11 @@ public partial class UsageRecord
     public Int32 ElapsedMs { get => _ElapsedMs; set { if (OnPropertyChanging("ElapsedMs", value)) { _ElapsedMs = value; OnPropertyChanged("ElapsedMs"); } } }
 
     private String? _Source;
-    /// <summary>请求来源。Chat=对话/Gateway=网关</summary>
+    /// <summary>请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化</summary>
     [DisplayName("请求来源")]
-    [Description("请求来源。Chat=对话/Gateway=网关")]
+    [Description("请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化")]
     [DataObjectField(false, false, true, 50)]
-    [BindColumn("Source", "请求来源。Chat=对话/Gateway=网关", "")]
+    [BindColumn("Source", "请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化", "")]
     public String? Source { get => _Source; set { if (OnPropertyChanging("Source", value)) { _Source = value; OnPropertyChanged("Source"); } } }
 
     private String? _TraceId;
@@ -268,6 +269,22 @@ public partial class UsageRecord
     [Map(nameof(UserId), typeof(XCode.Membership.User), "ID")]
     public String? UserName => User?.ToString();
 
+    /// <summary>应用密钥</summary>
+    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
+    public AppKey? AppKey => Extends.Get(nameof(AppKey), k => AppKey.FindById(AppKeyId));
+
+    /// <summary>应用密钥</summary>
+    [Map(nameof(AppKeyId), typeof(AppKey), "Id")]
+    public String? AppKeyName => AppKey?.ToString();
+
+    /// <summary>会话</summary>
+    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
+    public Conversation? Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
+
+    /// <summary>会话</summary>
+    [Map(nameof(ConversationId), typeof(Conversation), "Id")]
+    public String? Title => Conversation?.ToString();
+
     #endregion
 
     #region 扩展查询
@@ -320,6 +337,16 @@ public partial class UsageRecord
 
         return FindAll(_.ConversationId == conversationId);
     }
+
+    /// <summary>根据请求来源查找</summary>
+    /// <param name="source">请求来源</param>
+    /// <returns>实体列表</returns>
+    public static IList<UsageRecord> FindAllBySource(String? source)
+    {
+        if (source == null) return [];
+
+        return FindAll(_.Source == source);
+    }
     #endregion
 
     #region 高级查询
@@ -328,12 +355,13 @@ public partial class UsageRecord
     /// <param name="appKeyId">应用密钥。通过API网关调用时关联的AppKey</param>
     /// <param name="conversationId">会话</param>
     /// <param name="modelId">模型。引用ModelConfig.Id</param>
+    /// <param name="source">请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化</param>
     /// <param name="start">编号开始</param>
     /// <param name="end">编号结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<UsageRecord> Search(Int32 userId, Int32 appKeyId, Int64 conversationId, Int32 modelId, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<UsageRecord> Search(Int32 userId, Int32 appKeyId, Int64 conversationId, Int32 modelId, String? source, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
@@ -341,6 +369,7 @@ public partial class UsageRecord
         if (appKeyId >= 0) exp &= _.AppKeyId == appKeyId;
         if (conversationId >= 0) exp &= _.ConversationId == conversationId;
         if (modelId >= 0) exp &= _.ModelId == modelId;
+        if (!source.IsNullOrEmpty()) exp &= _.Source == source;
         exp &= _.Id.Between(start, end, Meta.Factory.Snow);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
 
@@ -415,7 +444,7 @@ public partial class UsageRecord
         /// <summary>耗时。毫秒</summary>
         public static readonly Field ElapsedMs = FindByName("ElapsedMs");
 
-        /// <summary>请求来源。Chat=对话/Gateway=网关</summary>
+        /// <summary>请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化</summary>
         public static readonly Field Source = FindByName("Source");
 
         /// <summary>链路。方便问题排查</summary>
@@ -484,7 +513,7 @@ public partial class UsageRecord
         /// <summary>耗时。毫秒</summary>
         public const String ElapsedMs = "ElapsedMs";
 
-        /// <summary>请求来源。Chat=对话/Gateway=网关</summary>
+        /// <summary>请求来源。Chat=主对话/Gateway=网关/Title=标题生成/Compact=上下文压缩/Memory=记忆提取/Knowledge=知识分析/Image=图片生成/Video=视频生成/Embedding=向量化</summary>
         public const String Source = "Source";
 
         /// <summary>链路。方便问题排查</summary>

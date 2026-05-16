@@ -80,10 +80,26 @@ public class DashScopeProvider : OpenAiProvider
         new("text-embedding-v1", "通用文本向量 V1", new(false, false, false, false)),
     ];
 
-    /// <summary>文生图模型列表。Wanx 万象系列，通过 <see cref="OpenAiProvider.TextToImageAsync"/> 调用</summary>
-    /// <remarks>端点：POST /compatible-mode/v1/images/generations</remarks>
+    /// <summary>文生图/图像编辑模型列表。通过 <see cref="OpenAiProvider.TextToImageAsync"/> 或 <see cref="OpenAiProvider.EditImageAsync"/> 调用</summary>
+    /// <remarks>
+    /// 原生多模态端点（qwen-image* / wan2.x-t2i）：POST /api/v1/services/aigc/multimodal-generation/generation<br/>
+    /// 兼容模式端点（wanx*）：POST /compatible-mode/v1/images/generations<br/>
+    /// qwen-image-2.0* 和 qwen-image-edit* 同时支持文生图与图像编辑
+    /// </remarks>
     public AiModelInfo[] ImageModels { get; } =
     [
+        // qwen-image 旧款：仅文生图，兼容原生多模态端点
+        new("qwen-image",         "千问文生图",           new(false, false, true, false)),
+        new("qwen-image-plus",    "千问文生图 Plus",      new(false, false, true, false)),
+        new("qwen-image-max",     "千问文生图 Max",       new(false, false, true, false)),
+        // qwen-image-2.0 系列：文生图 + 图像编辑（原生多模态端点）
+        new("qwen-image-2.0",     "千问文生图/编辑 2.0",       new(false, false, true, false)),
+        new("qwen-image-2.0-pro", "千问文生图/编辑 2.0 Pro",   new(false, false, true, false)),
+        // qwen-image-edit 系列：专用图像编辑（原生多模态端点）
+        new("qwen-image-edit-max",  "千问图像编辑 Max",   new(false, false, true, false)),
+        new("qwen-image-edit-plus", "千问图像编辑 Plus",  new(false, false, true, false)),
+        new("qwen-image-edit",      "千问图像编辑",       new(false, false, true, false)),
+        // 万象系列：仅文生图，兼容模式端点
         new("wanx3.0-t2i-turbo", "万象3.0 Turbo", new(false, false, true, false)),
         new("wanx3.0-t2i-plus",  "万象3.0 Plus",  new(false, false, true, false)),
         new("wanx2.1-t2i-turbo", "万象2.1 Turbo", new(false, false, true, false)),
@@ -121,7 +137,7 @@ public class DashScopeProvider : OpenAiProvider
     /// <summary>创建嵌入向量客户端。使用兼容模式地址，与文本对话原生地址隔离</summary>
     /// <param name="options">连接选项（Endpoint、ApiKey 等）</param>
     /// <returns>已配置的 IEmbeddingClient 实例</returns>
-    public override IEmbeddingClient CreateEmbeddingClient(AiProviderOptions options)
+    public override IEmbeddingClient? CreateEmbeddingClient(AiProviderOptions options)
     {
         // Embedding 沿用兼容模式 /compatible-mode/v1/embeddings
         var embOptions = new AiProviderOptions
@@ -130,7 +146,8 @@ public class DashScopeProvider : OpenAiProvider
             Model = options.Model,
             Endpoint = CompatibleEndpoint,
         };
-        return new OpenAiEmbeddingClient(Name, CompatibleEndpoint, embOptions);
+        var client = CreateClient(embOptions);
+        return client as IEmbeddingClient;
     }
 
     /// <summary>创建 DashScope 专属对话选项实例。返回 <see cref="DashScopeChatOptions"/> 以便强类型设置 DashScope 高级参数</summary>
@@ -238,7 +255,7 @@ public class DashScopeProvider : OpenAiProvider
     public override async Task<OpenAiModelListResponse?> ListModelsAsync(AiProviderOptions options, CancellationToken cancellationToken = default)
     {
         // 模型列表 API 使用兼容模式
-        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/models";
+        var url = AiClientBase.CombineApiUrl(CompatibleEndpoint, "/v1/models");
         var json = await TryGetAsync(url, options, cancellationToken).ConfigureAwait(false);
         if (json == null) return null;
 
@@ -286,7 +303,7 @@ public class DashScopeProvider : OpenAiProvider
     /// <returns>file_id 字符串（如 "file-fe109bf8-xxxx"）</returns>
     public async Task<String> UploadFileAsync(String filePath, String? fileName, AiProviderOptions options, CancellationToken cancellationToken = default)
     {
-        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/files";
+        var url = AiClientBase.CombineApiUrl(CompatibleEndpoint, "/v1/files");
         fileName ??= Path.GetFileName(filePath);
         var fileBytes = File.ReadAllBytes(filePath);
         return await UploadFileBytesAsync(fileBytes, fileName, options, cancellationToken).ConfigureAwait(false);
@@ -300,7 +317,7 @@ public class DashScopeProvider : OpenAiProvider
     /// <returns>file_id 字符串（如 "file-fe109bf8-xxxx"）</returns>
     public async Task<String> UploadFileBytesAsync(Byte[] fileBytes, String fileName, AiProviderOptions options, CancellationToken cancellationToken = default)
     {
-        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/files";
+        var url = AiClientBase.CombineApiUrl(CompatibleEndpoint, "/v1/files");
 
         using var form = new MultipartFormDataContent();
         var filePartContent = new ByteArrayContent(fileBytes);
@@ -335,7 +352,7 @@ public class DashScopeProvider : OpenAiProvider
     /// <param name="cancellationToken">取消令牌</param>
     public async Task DeleteFileAsync(String fileId, AiProviderOptions options, CancellationToken cancellationToken = default)
     {
-        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/files/" + fileId;
+        var url = AiClientBase.CombineApiUrl(CompatibleEndpoint, "/v1/files/" + fileId);
 
         using var req = new HttpRequestMessage(HttpMethod.Delete, url);
         SetHeaders(req, options);
@@ -383,7 +400,7 @@ public class DashScopeProvider : OpenAiProvider
     /// <returns>重排序响应，Results 按相关度降序排列</returns>
     public async Task<RerankResponse> RerankAsync(RerankRequest request, AiProviderOptions options, CancellationToken cancellationToken = default)
     {
-        var url = CompatibleEndpoint.TrimEnd('/') + "/v1/reranks";
+        var url = AiClientBase.CombineApiUrl(CompatibleEndpoint, "/v1/reranks");
 
         var body = new Dictionary<String, Object?>
         {

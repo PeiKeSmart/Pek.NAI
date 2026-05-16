@@ -1,13 +1,7 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using NewLife.ChatAI.Entity;
-using NewLife;
+﻿using NewLife.ChatAI.Entity;
 using NewLife.Cube;
-using NewLife.Cube.Extensions;
-using NewLife.Cube.ViewModels;
-using NewLife.Log;
 using NewLife.Web;
 using XCode.Membership;
-using static NewLife.ChatAI.Entity.ModelConfig;
 
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
@@ -20,7 +14,7 @@ public class ModelConfigController : EntityController<ModelConfig>
     {
         //LogOnChange = true;
 
-        //ListFields.RemoveField("Id", "Creator");
+        ListFields.RemoveField("UpstreamModel", "PriceTiers", "RoleIds", "DepartmentIds", "RoleNames", "DepartmentNames", "ModelTime");
         ListFields.RemoveCreateField().RemoveRemarkField();
 
         {
@@ -53,16 +47,16 @@ public class ModelConfigController : EntityController<ModelConfig>
         var providerId = p["providerId"].ToInt(-1);
         var code = p["code"];
         var supportThinking = p["supportThinking"]?.ToBoolean();
-        var supportFunctionCalling = p["supportFunctionCalling"]?.ToBoolean();
+        var supportFunction = p["supportFunction"]?.ToBoolean();
         var supportVision = p["supportVision"]?.ToBoolean();
         var supportAudio = p["supportAudio"]?.ToBoolean();
-        var supportImageGeneration = p["supportImageGeneration"]?.ToBoolean();
-        var supportVideoGeneration = p["supportVideoGeneration"]?.ToBoolean();
+        var supportImage = p["supportImage"]?.ToBoolean();
+        var supportVideo = p["supportVideo"]?.ToBoolean();
         var enable = p["enable"]?.ToBoolean();
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return ModelConfig.Search(providerId, code, supportThinking, supportFunctionCalling, supportVision, supportAudio, supportImageGeneration, supportVideoGeneration, enable, start, end, p["Q"], p);
+        return ModelConfig.Search(providerId, code, supportThinking, supportFunction, supportVision, supportAudio, supportImage, supportVideo, enable, start, end, p["Q"], p);
     }
 }

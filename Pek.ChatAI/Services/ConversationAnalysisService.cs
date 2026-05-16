@@ -1,11 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Text;
 using NewLife.AI.Clients;
-using NewLife.AI.Models;
-using NewLife.ChatAI.Entity;
 using NewLife.Log;
 using NewLife.Serialization;
-using AiChatMessage = NewLife.AI.Models.ChatMessage;
 
 namespace NewLife.ChatAI.Services;
 
@@ -18,9 +15,10 @@ namespace NewLife.ChatAI.Services;
 /// </remarks>
 /// <param name="modelService">模型服务</param>
 /// <param name="memoryService">记忆服务</param>
+/// <param name="chatSetting">配置</param>
 /// <param name="tracer">链路追踪</param>
 /// <param name="log">日志</param>
-public class ConversationAnalysisService(ModelService modelService, MemoryService memoryService, ITracer tracer, ILog log)
+public class ConversationAnalysisService(ModelService modelService, MemoryService memoryService, ChatSetting chatSetting, ITracer tracer, ILog log)
 {
     /// <summary>记忆服务（同时对外暴露给 LearningFilter 注入上下文）</summary>
     public MemoryService MemoryService { get; } = memoryService;
@@ -81,7 +79,7 @@ public class ConversationAnalysisService(ModelService modelService, MemoryServic
         CancellationToken cancellationToken = default)
     {
         // 智能触发条件：用户消息总字数低于配置阈值且轮数 < 2 时跳过
-        var minContentLength = ChatSetting.Current.MinLearningContentLength;
+        var minContentLength = chatSetting.MinLearningContentLength;
         var userMessages = messages.Where(m => m.Role == "user").ToList();
         var totalChars = 0;
         foreach (var msg in userMessages)
@@ -90,10 +88,7 @@ public class ConversationAnalysisService(ModelService modelService, MemoryServic
         }
 
         if (totalChars < minContentLength && userMessages.Count < 2)
-        {
-            //log?.Debug("用户 {0} 消息不足（{1}轮/{2}字），跳过记忆提取", userId, userMessages.Count, totalChars);
             return;
-        }
 
         using var span = tracer?.NewSpan("ai:Analyze");
 
@@ -116,31 +111,18 @@ public class ConversationAnalysisService(ModelService modelService, MemoryServic
     #endregion
 
     #region 辅助
-    private async Task<Int32> ExtractAndSaveMemoriesAsync(
-        Int32 userId,
-        Int64 conversationId,
-        IList<AiChatMessage> messages,
-        IChatResponse response,
-        CancellationToken cancellationToken)
+    private async Task<Int32> ExtractAndSaveMemoriesAsync(Int32 userId, Int64 conversationId, IList<AiChatMessage> messages, IChatResponse response, CancellationToken cancellationToken)
     {
         // 构建对话文本摘要（只取 user/assistant 消息）
         var dialogText = BuildDialogText(messages, response);
 
         // 获取可用于分析的模型配置（使用最小模型以降低成本）
         var modelConfig = GetAnalysisModel();
-        if (modelConfig == null)
-        {
-            log?.Warn("未找到可用于分析的模型配置，跳过记忆提取");
-            return 0;
-        }
+        if (modelConfig == null) return 0;
 
         // 调用 AI 提取记忆
         using var client = modelService.CreateClient(modelConfig);
-        if (client == null)
-        {
-            log?.Warn("未找到模型 '{0}' 对应的服务商，跳过记忆提取", modelConfig.Code);
-            return 0;
-        }
+        if (client == null) return 0;
 
         var jsonText = await client.ChatAsync(
             [("system", ExtractionSystemPrompt), ("user", $"请分析以下对话内容：\n\n{dialogText}")],
@@ -177,10 +159,9 @@ public class ConversationAnalysisService(ModelService modelService, MemoryServic
     private ModelConfig? GetAnalysisModel()
     {
         // 优先使用配置的学习模型
-        var setting = ChatSetting.Current;
-        if (!setting.LearningModel.IsNullOrWhiteSpace())
+        if (!chatSetting.LearningModel.IsNullOrWhiteSpace())
         {
-            var configured = modelService.ResolveModelByCode(setting.LearningModel);
+            var configured = modelService.ResolveModelByCode(chatSetting.LearningModel);
             if (configured != null) return configured;
         }
 
@@ -191,11 +172,7 @@ public class ConversationAnalysisService(ModelService modelService, MemoryServic
                ?? all.FirstOrDefault();
     }
 
-    private async Task<Int32> ParseAndSaveAsync(
-        Int32 userId,
-        Int64 conversationId,
-        String jsonText,
-        CancellationToken cancellationToken)
+    private async Task<Int32> ParseAndSaveAsync(Int32 userId, Int64 conversationId, String jsonText, CancellationToken cancellationToken)
     {
         // 提取 JSON 块（有时 AI 会夹杂 markdown）
         var start = jsonText.IndexOf('{');

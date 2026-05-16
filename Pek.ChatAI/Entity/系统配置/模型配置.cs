@@ -54,6 +54,14 @@ public partial class ModelConfig
     [BindColumn("Name", "名称。显示名称", "", Master = true)]
     public String? Name { get => _Name; set { if (OnPropertyChanging("Name", value)) { _Name = value; OnPropertyChanged("Name"); } } }
 
+    private String? _UpstreamModel;
+    /// <summary>上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）</summary>
+    [DisplayName("上游模型")]
+    [Description("上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）")]
+    [DataObjectField(false, false, true, 50)]
+    [BindColumn("UpstreamModel", "上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）", "")]
+    public String? UpstreamModel { get => _UpstreamModel; set { if (OnPropertyChanging("UpstreamModel", value)) { _UpstreamModel = value; OnPropertyChanged("UpstreamModel"); } } }
+
     private Int32 _ContextLength;
     /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
     [DisplayName("上下文长度")]
@@ -70,13 +78,13 @@ public partial class ModelConfig
     [BindColumn("SupportThinking", "思考。是否支持思考模式", "")]
     public Boolean SupportThinking { get => _SupportThinking; set { if (OnPropertyChanging("SupportThinking", value)) { _SupportThinking = value; OnPropertyChanged("SupportThinking"); } } }
 
-    private Boolean _SupportFunctionCalling;
+    private Boolean _SupportFunction;
     /// <summary>函数调用。是否支持Function Calling</summary>
     [DisplayName("函数调用")]
     [Description("函数调用。是否支持Function Calling")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("SupportFunctionCalling", "函数调用。是否支持Function Calling", "")]
-    public Boolean SupportFunctionCalling { get => _SupportFunctionCalling; set { if (OnPropertyChanging("SupportFunctionCalling", value)) { _SupportFunctionCalling = value; OnPropertyChanged("SupportFunctionCalling"); } } }
+    [BindColumn("SupportFunction", "函数调用。是否支持Function Calling", "")]
+    public Boolean SupportFunction { get => _SupportFunction; set { if (OnPropertyChanging("SupportFunction", value)) { _SupportFunction = value; OnPropertyChanged("SupportFunction"); } } }
 
     private Boolean _SupportVision;
     /// <summary>视觉。是否支持图片输入</summary>
@@ -94,21 +102,29 @@ public partial class ModelConfig
     [BindColumn("SupportAudio", "音频。是否支持音频输入输出", "")]
     public Boolean SupportAudio { get => _SupportAudio; set { if (OnPropertyChanging("SupportAudio", value)) { _SupportAudio = value; OnPropertyChanged("SupportAudio"); } } }
 
-    private Boolean _SupportImageGeneration;
+    private Boolean _SupportImage;
     /// <summary>图像。是否支持文生图</summary>
     [DisplayName("图像")]
     [Description("图像。是否支持文生图")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("SupportImageGeneration", "图像。是否支持文生图", "")]
-    public Boolean SupportImageGeneration { get => _SupportImageGeneration; set { if (OnPropertyChanging("SupportImageGeneration", value)) { _SupportImageGeneration = value; OnPropertyChanged("SupportImageGeneration"); } } }
+    [BindColumn("SupportImage", "图像。是否支持文生图", "")]
+    public Boolean SupportImage { get => _SupportImage; set { if (OnPropertyChanging("SupportImage", value)) { _SupportImage = value; OnPropertyChanged("SupportImage"); } } }
 
-    private Boolean _SupportVideoGeneration;
+    private Boolean _SupportVideo;
     /// <summary>视频生成。是否支持文生视频</summary>
     [DisplayName("视频生成")]
     [Description("视频生成。是否支持文生视频")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("SupportVideoGeneration", "视频生成。是否支持文生视频", "")]
-    public Boolean SupportVideoGeneration { get => _SupportVideoGeneration; set { if (OnPropertyChanging("SupportVideoGeneration", value)) { _SupportVideoGeneration = value; OnPropertyChanged("SupportVideoGeneration"); } } }
+    [BindColumn("SupportVideo", "视频生成。是否支持文生视频", "")]
+    public Boolean SupportVideo { get => _SupportVideo; set { if (OnPropertyChanging("SupportVideo", value)) { _SupportVideo = value; OnPropertyChanged("SupportVideo"); } } }
+
+    private Boolean _SupportEmbedding;
+    /// <summary>嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</summary>
+    [DisplayName("嵌入向量")]
+    [Description("嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("SupportEmbedding", "嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景", "")]
+    public Boolean SupportEmbedding { get => _SupportEmbedding; set { if (OnPropertyChanging("SupportEmbedding", value)) { _SupportEmbedding = value; OnPropertyChanged("SupportEmbedding"); } } }
 
     private String? _SystemPrompt;
     /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
@@ -234,13 +250,15 @@ public partial class ModelConfig
             "ProviderId" => _ProviderId,
             "Code" => _Code,
             "Name" => _Name,
+            "UpstreamModel" => _UpstreamModel,
             "ContextLength" => _ContextLength,
             "SupportThinking" => _SupportThinking,
-            "SupportFunctionCalling" => _SupportFunctionCalling,
+            "SupportFunction" => _SupportFunction,
             "SupportVision" => _SupportVision,
             "SupportAudio" => _SupportAudio,
-            "SupportImageGeneration" => _SupportImageGeneration,
-            "SupportVideoGeneration" => _SupportVideoGeneration,
+            "SupportImage" => _SupportImage,
+            "SupportVideo" => _SupportVideo,
+            "SupportEmbedding" => _SupportEmbedding,
             "SystemPrompt" => _SystemPrompt,
             "RoleIds" => _RoleIds,
             "DepartmentIds" => _DepartmentIds,
@@ -264,13 +282,15 @@ public partial class ModelConfig
                 case "ProviderId": _ProviderId = value.ToInt(); break;
                 case "Code": _Code = Convert.ToString(value); break;
                 case "Name": _Name = Convert.ToString(value); break;
+                case "UpstreamModel": _UpstreamModel = Convert.ToString(value); break;
                 case "ContextLength": _ContextLength = value.ToInt(); break;
                 case "SupportThinking": _SupportThinking = value.ToBoolean(); break;
-                case "SupportFunctionCalling": _SupportFunctionCalling = value.ToBoolean(); break;
+                case "SupportFunction": _SupportFunction = value.ToBoolean(); break;
                 case "SupportVision": _SupportVision = value.ToBoolean(); break;
                 case "SupportAudio": _SupportAudio = value.ToBoolean(); break;
-                case "SupportImageGeneration": _SupportImageGeneration = value.ToBoolean(); break;
-                case "SupportVideoGeneration": _SupportVideoGeneration = value.ToBoolean(); break;
+                case "SupportImage": _SupportImage = value.ToBoolean(); break;
+                case "SupportVideo": _SupportVideo = value.ToBoolean(); break;
+                case "SupportEmbedding": _SupportEmbedding = value.ToBoolean(); break;
                 case "SystemPrompt": _SystemPrompt = Convert.ToString(value); break;
                 case "RoleIds": _RoleIds = Convert.ToString(value); break;
                 case "DepartmentIds": _DepartmentIds = Convert.ToString(value); break;
@@ -352,29 +372,31 @@ public partial class ModelConfig
     /// <param name="providerId">提供商。关联的提供商实例ID</param>
     /// <param name="code">编码。模型唯一标识</param>
     /// <param name="supportThinking">思考。是否支持思考模式</param>
-    /// <param name="supportFunctionCalling">函数调用。是否支持Function Calling</param>
+    /// <param name="supportFunction">函数调用。是否支持Function Calling</param>
     /// <param name="supportVision">视觉。是否支持图片输入</param>
     /// <param name="supportAudio">音频。是否支持音频输入输出</param>
-    /// <param name="supportImageGeneration">图像。是否支持文生图</param>
-    /// <param name="supportVideoGeneration">视频生成。是否支持文生视频</param>
+    /// <param name="supportImage">图像。是否支持文生图</param>
+    /// <param name="supportVideo">视频生成。是否支持文生视频</param>
+    /// <param name="supportEmbedding">嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</param>
     /// <param name="enable">启用</param>
     /// <param name="start">更新时间开始</param>
     /// <param name="end">更新时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<ModelConfig> Search(Int32 providerId, String? code, Boolean? supportThinking, Boolean? supportFunctionCalling, Boolean? supportVision, Boolean? supportAudio, Boolean? supportImageGeneration, Boolean? supportVideoGeneration, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<ModelConfig> Search(Int32 providerId, String? code, Boolean? supportThinking, Boolean? supportFunction, Boolean? supportVision, Boolean? supportAudio, Boolean? supportImage, Boolean? supportVideo, Boolean? supportEmbedding, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
         if (providerId >= 0) exp &= _.ProviderId == providerId;
         if (!code.IsNullOrEmpty()) exp &= _.Code == code;
         if (supportThinking != null) exp &= _.SupportThinking == supportThinking;
-        if (supportFunctionCalling != null) exp &= _.SupportFunctionCalling == supportFunctionCalling;
+        if (supportFunction != null) exp &= _.SupportFunction == supportFunction;
         if (supportVision != null) exp &= _.SupportVision == supportVision;
         if (supportAudio != null) exp &= _.SupportAudio == supportAudio;
-        if (supportImageGeneration != null) exp &= _.SupportImageGeneration == supportImageGeneration;
-        if (supportVideoGeneration != null) exp &= _.SupportVideoGeneration == supportVideoGeneration;
+        if (supportImage != null) exp &= _.SupportImage == supportImage;
+        if (supportVideo != null) exp &= _.SupportVideo == supportVideo;
+        if (supportEmbedding != null) exp &= _.SupportEmbedding == supportEmbedding;
         if (enable != null) exp &= _.Enable == enable;
         exp &= _.UpdateTime.Between(start, end);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
@@ -399,6 +421,9 @@ public partial class ModelConfig
         /// <summary>名称。显示名称</summary>
         public static readonly Field Name = FindByName("Name");
 
+        /// <summary>上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）</summary>
+        public static readonly Field UpstreamModel = FindByName("UpstreamModel");
+
         /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
         public static readonly Field ContextLength = FindByName("ContextLength");
 
@@ -406,7 +431,7 @@ public partial class ModelConfig
         public static readonly Field SupportThinking = FindByName("SupportThinking");
 
         /// <summary>函数调用。是否支持Function Calling</summary>
-        public static readonly Field SupportFunctionCalling = FindByName("SupportFunctionCalling");
+        public static readonly Field SupportFunction = FindByName("SupportFunction");
 
         /// <summary>视觉。是否支持图片输入</summary>
         public static readonly Field SupportVision = FindByName("SupportVision");
@@ -415,10 +440,13 @@ public partial class ModelConfig
         public static readonly Field SupportAudio = FindByName("SupportAudio");
 
         /// <summary>图像。是否支持文生图</summary>
-        public static readonly Field SupportImageGeneration = FindByName("SupportImageGeneration");
+        public static readonly Field SupportImage = FindByName("SupportImage");
 
         /// <summary>视频生成。是否支持文生视频</summary>
-        public static readonly Field SupportVideoGeneration = FindByName("SupportVideoGeneration");
+        public static readonly Field SupportVideo = FindByName("SupportVideo");
+
+        /// <summary>嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</summary>
+        public static readonly Field SupportEmbedding = FindByName("SupportEmbedding");
 
         /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
         public static readonly Field SystemPrompt = FindByName("SystemPrompt");
@@ -477,6 +505,9 @@ public partial class ModelConfig
         /// <summary>名称。显示名称</summary>
         public const String Name = "Name";
 
+        /// <summary>上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）</summary>
+        public const String UpstreamModel = "UpstreamModel";
+
         /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
         public const String ContextLength = "ContextLength";
 
@@ -484,7 +515,7 @@ public partial class ModelConfig
         public const String SupportThinking = "SupportThinking";
 
         /// <summary>函数调用。是否支持Function Calling</summary>
-        public const String SupportFunctionCalling = "SupportFunctionCalling";
+        public const String SupportFunction = "SupportFunction";
 
         /// <summary>视觉。是否支持图片输入</summary>
         public const String SupportVision = "SupportVision";
@@ -493,10 +524,13 @@ public partial class ModelConfig
         public const String SupportAudio = "SupportAudio";
 
         /// <summary>图像。是否支持文生图</summary>
-        public const String SupportImageGeneration = "SupportImageGeneration";
+        public const String SupportImage = "SupportImage";
 
         /// <summary>视频生成。是否支持文生视频</summary>
-        public const String SupportVideoGeneration = "SupportVideoGeneration";
+        public const String SupportVideo = "SupportVideo";
+
+        /// <summary>嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</summary>
+        public const String SupportEmbedding = "SupportEmbedding";
 
         /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
         public const String SystemPrompt = "SystemPrompt";

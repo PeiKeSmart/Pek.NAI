@@ -11,7 +11,7 @@ public class BuiltinToolService
     #region 时间工具
 
     /// <summary>获取当前日期和时间信息，包括完整日期、星期、时间、时区、Unix时间戳等</summary>
-    [ToolDescription("get_current_time", IsSystem = true)]
+    [ToolDescription("get_current_time", Triggers = "今天,昨天,明天", IsSystem = true)]
     [DisplayName("当前时间")]
     [Description("获取当前日期和时间信息，包括完整日期、星期、时间、时区、Unix时间戳等")]
     public String GetCurrentTime()
@@ -49,7 +49,7 @@ public class BuiltinToolService
 
     /// <summary>计算数学表达式的结果。支持加减乘除、括号、取模等基本运算</summary>
     /// <param name="expression">数学表达式，如 (3 + 5) * 2 - 10 / 3</param>
-    [ToolDescription("calculate")]
+    [ToolDescription("calculate", Triggers = "计算一下,帮我计算,数学计算,表达式求值", Enable = false)]
     [DisplayName("数学计算")]
     [Description("计算数学表达式的结果。支持加减乘除、括号、取模等基本运算")]
     public Object Calculate([Description("数学表达式，如 (3 + 5) * 2 - 10 / 3")] String expression)

@@ -4,17 +4,17 @@ using System.Web.Script.Serialization;
 using System.Xml.Serialization;
 using NewLife;
 using NewLife.AI.Clients;
+using NewLife.AI.Interfaces;
 using NewLife.Common;
 using NewLife.Data;
 using NewLife.Log;
-using NewLife.Web;
 using XCode;
 using XCode.Cache;
 using XCode.Membership;
 
 namespace NewLife.ChatAI.Entity;
 
-public partial class ModelConfig : Entity<ModelConfig>
+public partial class ModelConfig : Entity<ModelConfig>, IModelConfig
 {
     #region 对象操作
     // 控制最大缓存数量，Find/FindAll查询方法在表行数小于该值时走实体缓存
@@ -103,11 +103,11 @@ public partial class ModelConfig : Entity<ModelConfig>
                 if (model.Capabilities != null)
                 {
                     entity.SupportThinking = model.Capabilities.SupportThinking;
-                    entity.SupportFunctionCalling = model.Capabilities.SupportFunctionCalling;
+                    entity.SupportFunction = model.Capabilities.SupportFunction;
                     entity.SupportVision = model.Capabilities.SupportVision;
                     entity.SupportAudio = model.Capabilities.SupportAudio;
-                    entity.SupportImageGeneration = model.Capabilities.SupportImageGeneration;
-                    entity.SupportVideoGeneration = model.Capabilities.SupportVideoGeneration;
+                    entity.SupportImage = model.Capabilities.SupportImage;
+                    entity.SupportVideo = model.Capabilities.SupportVideo;
                 }
 
                 count += entity.Save();
@@ -191,12 +191,13 @@ public partial class ModelConfig : Entity<ModelConfig>
         return provider?.Provider ?? "";
     }
 
-    /// <summary>获取有效的API协议。从关联的提供商配置中获取</summary>
+    /// <summary>获取有效模型编码。优先返回上游模型，为空时回退到内部编码</summary>
     /// <returns></returns>
-    public String GetEffectiveApiProtocol()
+    public String GetEffectiveModelCode()
     {
-        var provider = ProviderInfo;
-        return provider?.ApiProtocol ?? "";
+        if (!UpstreamModel.IsNullOrEmpty()) return UpstreamModel;
+
+        return Code ?? "";
     }
 
     /// <summary>检查用户是否有权限使用此模型</summary>
@@ -224,13 +225,6 @@ public partial class ModelConfig : Entity<ModelConfig>
 
         return false;
     }
-
-    ///// <summary>获取所有启用的模型配置，按排序降序、编号降序。模型自身已启用且关联提供商未禁用时才认为可用</summary>
-    ///// <returns>模型配置列表</returns>
-    //public static IList<ModelConfig> FindAllEnabled()
-    //{
-    //    return FindAllWithCache().Where(e => e.Enable && e.ProviderInfo?.Enable == true).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
-    //}
 
     /// <summary>根据编码查找启用的模型配置。模型自身已启用且关联提供商未禁用时才认为可用</summary>
     /// <param name="code">模型编码</param>
@@ -272,29 +266,29 @@ public partial class ModelConfig : Entity<ModelConfig>
     /// <param name="providerId">提供商编号</param>
     /// <param name="code">编码</param>
     /// <param name="supportThinking">支持思考</param>
-    /// <param name="supportFunctionCalling">支持函数调用</param>
+    /// <param name="supportFunction">支持函数调用</param>
     /// <param name="supportVision">支持视觉</param>
     /// <param name="supportAudio">支持音频</param>
-    /// <param name="supportImageGeneration">支持图像生成</param>
-    /// <param name="supportVideoGeneration">支持视频生成</param>
+    /// <param name="supportImage">支持图像生成</param>
+    /// <param name="supportVideo">支持视频生成</param>
     /// <param name="enable">启用</param>
     /// <param name="start">创建时间开始</param>
     /// <param name="end">创建时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数</param>
     /// <returns></returns>
-    public static IList<ModelConfig> Search(Int32 providerId, String code, Boolean? supportThinking, Boolean? supportFunctionCalling, Boolean? supportVision, Boolean? supportAudio, Boolean? supportImageGeneration, Boolean? supportVideoGeneration, Boolean? enable, DateTime start, DateTime end, String key, Pager page)
+    public static IList<ModelConfig> Search(Int32 providerId, String code, Boolean? supportThinking, Boolean? supportFunction, Boolean? supportVision, Boolean? supportAudio, Boolean? supportImage, Boolean? supportVideo, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
         if (providerId >= 0) exp &= _.ProviderId == providerId;
         if (!code.IsNullOrEmpty()) exp &= _.Code == code;
         if (supportThinking != null) exp &= _.SupportThinking == supportThinking.Value;
-        if (supportFunctionCalling != null) exp &= _.SupportFunctionCalling == supportFunctionCalling.Value;
+        if (supportFunction != null) exp &= _.SupportFunction == supportFunction.Value;
         if (supportVision != null) exp &= _.SupportVision == supportVision.Value;
         if (supportAudio != null) exp &= _.SupportAudio == supportAudio.Value;
-        if (supportImageGeneration != null) exp &= _.SupportImageGeneration == supportImageGeneration.Value;
-        if (supportVideoGeneration != null) exp &= _.SupportVideoGeneration == supportVideoGeneration.Value;
+        if (supportImage != null) exp &= _.SupportImage == supportImage.Value;
+        if (supportVideo != null) exp &= _.SupportVideo == supportVideo.Value;
         if (enable != null) exp &= _.Enable == enable.Value;
 
         exp &= _.CreateTime.Between(start, end);

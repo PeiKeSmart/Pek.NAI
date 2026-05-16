@@ -2,7 +2,7 @@
 
 /// <summary>工具描述特性。标注在 C# 方法上，使其可被 <see cref="ToolRegistry"/> 注册为 AI 可调用工具</summary>
 /// <remarks>
-/// 方法的 XML 文档注释（<c>&lt;summary&gt;</c> 和 <c>&lt;param&gt;</c>）会被自动提取为工具描述。
+/// 方法的 <c>&lt;param&gt;</c>）会被自动提取为工具描述。
 /// <code>
 /// [ToolDescription("get_weather")]
 /// public async Task&lt;String&gt; GetWeatherAsync(String city)
@@ -33,4 +33,10 @@ public sealed class ToolDescriptionAttribute : Attribute
 
     /// <summary>是否系统工具。true 时每次 LLM 请求自动携带，无需 @引用；false 时需在消息中 @工具名 显式引用</summary>
     public Boolean IsSystem { get; set; }
+
+    /// <summary>触发词。多个词使用中英文逗号分隔，用户消息命中任一词时可自动激活该工具</summary>
+    public String? Triggers { get; set; }
+
+    /// <summary>是否启用。false 时同步到配置表后将保持禁用状态，可用于临时下线工具</summary>
+    public Boolean Enable { get; set; } = true;
 }

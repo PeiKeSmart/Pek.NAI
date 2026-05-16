@@ -1,32 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Runtime.Serialization;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web;
-using System.Web.Script.Serialization;
-using System.Xml.Serialization;
-using NewLife;
+﻿using NewLife.AI.Interfaces;
 using NewLife.Data;
-using NewLife.Log;
-using NewLife.Model;
-using NewLife.Reflection;
-using NewLife.Threading;
-using NewLife.Web;
 using XCode;
-using XCode.Cache;
-using XCode.Configuration;
-using XCode.DataAccessLayer;
-using XCode.Membership;
-using XCode.Shards;
 
 namespace NewLife.ChatAI.Entity;
 
-public partial class Conversation : Entity<Conversation>
+public partial class Conversation : Entity<Conversation>, IConversation
 {
     #region 对象操作
     // 控制最大缓存数量，Find/FindAll查询方法在表行数小于该值时走实体缓存
@@ -121,6 +99,16 @@ public partial class Conversation : Entity<Conversation>
     #endregion
 
     #region 高级查询
+    /// <summary>根据编号查找</summary>
+    /// <param name="id">编号</param>
+    /// <returns>实体对象</returns>
+    public static Conversation? FindById(Int64 id)
+    {
+        if (id < 0) return null;
+
+        //return Find(_.Id == id);
+        return Meta.SingleCache[id] as Conversation;
+    }
 
     // Select Count(Id) as Id,Category From Conversation Where CreateTime>'2020-01-24 00:00:00' Group By Category Order By Id Desc limit 20
     //static readonly FieldCache<Conversation> _CategoryCache = new(nameof(Category))
@@ -153,6 +141,27 @@ public partial class Conversation : Entity<Conversation>
     /// <returns>会话编号数组</returns>
     public static Int64[] FindIdsByUserId(Int32 userId)
         => FindAll(_.UserId == userId, null, _.Id, 0, 0).Select(e => e.Id).ToArray();
+
+    /// <summary>获取用户最近的会话列表，按最后消息时间倒序</summary>
+    /// <param name="userId">用户编号</param>
+    /// <param name="maxCount">最大返回数</param>
+    /// <returns>会话列表</returns>
+    public static IList<Conversation> FindAllByUserId(Int32 userId, Int32 maxCount)
+    {
+        if (userId <= 0 || maxCount <= 0) return [];
+
+        return FindAll(_.UserId == userId, _.LastMessageTime.Desc(), null, 0, maxCount);
+    }
+
+    /// <summary>统计用户的会话总数</summary>
+    /// <param name="userId">用户编号</param>
+    /// <returns>会话总数</returns>
+    public static Int32 CountByUserId(Int32 userId)
+    {
+        if (userId <= 0) return 0;
+
+        return (Int32)FindCount(_.UserId == userId);
+    }
     #endregion
 
     #region 业务操作

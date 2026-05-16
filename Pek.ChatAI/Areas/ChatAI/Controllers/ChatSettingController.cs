@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using Microsoft.AspNetCore.Mvc.Filters;
 using NewLife.AI.Models;
 using NewLife.ChatAI.Entity;

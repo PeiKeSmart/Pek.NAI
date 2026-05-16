@@ -1,12 +1,10 @@
-﻿using System.Runtime.Serialization;
-using System.Web.Script.Serialization;
-using System.Xml.Serialization;
+﻿using NewLife.AI.Interfaces;
 using NewLife.Data;
 using XCode;
 
 namespace NewLife.ChatAI.Entity;
 
-public partial class ChatMessage : Entity<ChatMessage>
+public partial class ChatMessage : Entity<ChatMessage>, IChatMessage
 {
     #region 对象操作
     // 控制最大缓存数量，Find/FindAll查询方法在表行数小于该值时走实体缓存
@@ -62,19 +60,30 @@ public partial class ChatMessage : Entity<ChatMessage>
     #endregion
 
     #region 扩展属性
-    /// <summary>会话</summary>
-    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
-    public Conversation? Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
+    ///// <summary>会话</summary>
+    //[XmlIgnore, IgnoreDataMember, ScriptIgnore]
+    //public Conversation? Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
 
-    /// <summary>会话</summary>
-    [Map(nameof(ConversationId), typeof(Conversation), "Id")]
-    public String? ConversationTitle => Conversation?.Title;
+    ///// <summary>会话</summary>
+    //[Map(nameof(ConversationId), typeof(Conversation), "Id")]
+    //public String? ConversationTitle => Conversation?.Title;
 
     /// <summary>是否主消息（用户或助手）</summary>
     public Boolean IsMain => Role.EqualIgnoreCase("user", "assistant");
     #endregion
 
     #region 高级查询
+    /// <summary>根据编号查找</summary>
+    /// <param name="id">编号</param>
+    /// <returns>实体对象</returns>
+    public static ChatMessage? FindById(Int64 id)
+    {
+        if (id < 0) return null;
+
+        //return Find(_.Id == id);
+        return Meta.SingleCache[id] as ChatMessage;
+    }
+
     /// <summary>根据会话查找，按创建时间降序排列</summary>
     /// <param name="conversationId">会话</param>
     /// <returns>实体列表</returns>
@@ -178,6 +187,41 @@ public partial class ChatMessage : Entity<ChatMessage>
         if (convIds == null || convIds.Length == 0) return [];
 
         return FindAll(_.ConversationId.In(convIds));
+    }
+
+    /// <summary>查询指定日期内有效的 assistant 消息（有 TotalTokens 且非错误结束）</summary>
+    /// <param name="date">日期（仅取日期部分）</param>
+    /// <returns>当日有效 assistant 消息列表</returns>
+    public static IList<ChatMessage> FindAllAssistantByDate(DateTime date)
+    {
+        var start = date.Date;
+        var end = start.AddDays(1);
+
+        return FindAll(
+            _.Id.Between(start, end, Meta.Factory.Snow)
+            & _.Role == "assistant"
+            & _.TotalTokens > 0
+        //& _.FinishReason != "error"
+        );
+    }
+
+    /// <summary>统计会话的消息数量</summary>
+    /// <param name="conversationId">会话编号</param>
+    /// <returns>消息数量</returns>
+    public static Int32 CountByConversationId(Int64 conversationId)
+    {
+        if (conversationId <= 0) return 0;
+        return (Int32)FindCount(_.ConversationId == conversationId);
+    }
+
+    /// <summary>统计指定用户下的消息总数（通过会话子查询）</summary>
+    /// <param name="userId">用户编号</param>
+    /// <returns>消息总数</returns>
+    public static Int32 CountByUserId(Int32 userId)
+    {
+        if (userId <= 0) return 0;
+
+        return (Int32)FindCount(_.ConversationId.In(Conversation.FindSQLWithKey(Conversation._.UserId == userId)));
     }
     #endregion
 

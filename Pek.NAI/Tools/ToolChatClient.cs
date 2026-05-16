@@ -29,8 +29,9 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
     /// <summary>工具提供者列表（按工具名直接路由执行工具调用）</summary>
     public IReadOnlyList<IToolProvider> Providers { get; }
 
-    /// <summary>最大工具调用循环次数，防止无限递归。默认 10</summary>
-    public Int32 MaxIterations { get; set; } = 10;
+    private Int32 _maxIterations = 10;
+    /// <summary>最大工具调用循环次数，防止无限递归。默认 10；设为 0 或负数时自动回退为 10</summary>
+    public Int32 MaxIterations { get => _maxIterations; set => _maxIterations = value > 0 ? value : 10; }
 
     /// <summary>工具结果最大字符数。超过此长度时自动截断并追加省略提示，0表示不限制</summary>
     public Int32 MaxResultLength { get; set; }
@@ -70,11 +71,15 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
 
         IChatResponse response;
         var iterations = 0;
+        UsageDetails? accumulatedUsage = null;
 
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             response = await InnerClient.GetResponseAsync(ChatRequest.Create(workMessages, workOptions), cancellationToken).ConfigureAwait(false);
+
+            // 累加每轮 LLM 调用的 Token 用量（N 次工具调用 = N+1 次 LLM 调用，每轮都有独立 Usage）
+            if (response.Usage != null) accumulatedUsage = accumulatedUsage?.Add(response.Usage) ?? response.Usage;
 
             // 从第一个 Choice 中获取工具调用
             var assistantMessage = response.Messages?.FirstOrDefault()?.Message;
@@ -83,10 +88,12 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
             if (++iterations > MaxIterations) break;
 
             // 追加 assistant 消息（含工具调用）
+            // DeepSeek 思考模式要求：有工具调用时必须将 reasoning_content 一并回传，否则 API 返回 400
             workMessages.Add(new ChatMessage
             {
                 Role = "assistant",
                 Content = assistantMessage?.Content,
+                ReasoningContent = assistantMessage?.ReasoningContent,
                 ToolCalls = toolCalls.Select(tc => new ToolCall { Id = tc.Id, Type = tc.Type, Function = tc.Function }).ToList(),
             });
 
@@ -98,6 +105,9 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
                 workMessages.Add(new ChatMessage { Role = "tool", ToolCallId = tc.Id, Content = result });
             }
         }
+
+        // 将所有轮次的 Token 用量累加值写回最终 response，供上层（如 InvokeLlmDirectAsync）使用
+        if (accumulatedUsage != null) response.Usage = accumulatedUsage;
 
         return response;
     }
@@ -122,6 +132,8 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
         var workOptions = MergeToolOptions(request, mergedTools);
         var workMessages = request.Messages.ToList();
 
+        UsageDetails? accumulatedUsage = null;
+
         for (var iteration = 0; iteration < MaxIterations; iteration++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -129,9 +141,15 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
             var toolCallCollector = new List<ToolCall>();
             String? finishReason = null;
             var assistantContent = (String?)null;
+            var assistantReasoningContent = (String?)null;
+            UsageDetails? iterUsage = null;
 
             await foreach (var chunk in InnerClient.GetStreamingResponseAsync(ChatRequest.Create(workMessages, workOptions, stream: true), cancellationToken).ConfigureAwait(false))
             {
+                // 轮次内合并 chunk Usage（各协议差异由 MergeChunkUsage 虚拟方法处理）
+                if (chunk.Usage != null)
+                    iterUsage = MergeChunkUsage(iterUsage, chunk.Usage);
+
                 var choice = chunk.Messages?.FirstOrDefault();
                 if (choice != null)
                 {
@@ -144,6 +162,10 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
                         if (!String.IsNullOrEmpty(text))
                             assistantContent = (assistantContent ?? String.Empty) + text;
 
+                        // 累积思维链内容（DeepSeek 思考模式要求：有工具调用时必须将 reasoning_content 一并回传）
+                        if (!String.IsNullOrEmpty(delta.ReasoningContent))
+                            assistantReasoningContent = (assistantReasoningContent ?? String.Empty) + delta.ReasoningContent;
+
                         // 合并流式 tool_calls 增量
                         if (delta.ToolCalls != null)
                         {
@@ -153,20 +175,40 @@ public class ToolChatClient : DelegatingChatClient, ILogFeature, ITracerFeature
                     }
                 }
 
+                // 始终透传原始 chunk，不做任何抑制
                 yield return chunk;
+
+                // 尽早原则：多轮场景下（有历史轮 accumulatedUsage），每个含 Usage 的 chunk 后
+                // 立即追加一个运行时累计总量 chunk，让消费方随时能获取到正确的跨轮累计值
+                if (chunk.Usage != null && accumulatedUsage != null)
+                    yield return new ChatResponse { Usage = accumulatedUsage.Add(iterUsage!) };
+            }
+
+            // 跨轮 Token 累加：将本轮 Usage 加到全局累加值
+            if (iterUsage != null)
+            {
+                DefaultSpan.Current?.AppendTag($"Tokens: {iterUsage.InputTokens}+{iterUsage.OutputTokens}={iterUsage.TotalTokens} finishReason: {finishReason}");
+
+                accumulatedUsage = accumulatedUsage?.Add(iterUsage) ?? iterUsage;
             }
 
             var isToolRound = finishReason.EqualIgnoreCase("tool_calls") ||
                               (toolCallCollector.Count > 0 && String.IsNullOrEmpty(finishReason));
 
             if (!isToolRound || toolCallCollector.Count == 0)
+            {
+                // 兜底：最终轮无 Usage chunk 但存在历史轮（极少见），补发累计总量
+                if (iterUsage == null && accumulatedUsage != null)
+                    yield return new ChatResponse { Usage = accumulatedUsage };
                 yield break;
+            }
 
             // 追加 assistant 消息（含工具调用）
             workMessages.Add(new ChatMessage
             {
                 Role = "assistant",
                 Content = assistantContent,
+                ReasoningContent = assistantReasoningContent,
                 ToolCalls = toolCallCollector.ToList(),
             });
 

@@ -12,7 +12,7 @@
 /// <param name="options">连接选项（Endpoint、ApiKey、Model 即 deployment 名称）</param>
 [AiClient("AzureAI", "Azure OpenAI", "https://{resource}.openai.azure.com",
     Description = "微软 Azure 托管的 OpenAI 模型服务，使用 deployment 方式部署", Order = 3)]
-public class AzureAIChatClient(AiClientOptions options) : OpenAIChatClient(options)
+public class AzureAIChatClient(AiClientOptions options) : OpenAIClientBase(options)
 {
     #region 属性
     /// <inheritdoc/>

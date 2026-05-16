@@ -1,16 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using NewLife.AI.Services;
-using NewLife.ChatAI.Models;
-using NewLife.ChatAI.Services;
 using NewLife.Log;
 
 namespace NewLife.ChatAI.Controllers;
 
 /// <summary>消息控制器</summary>
 [Route("api")]
-public class MessagesController(ChatApplicationService chatService, MessageService messageService, MessageRateLimiter rateLimiter, ITracer tracer) : ChatApiControllerBase
+public class MessagesController(ChatApplicationService chatService, IMessageFlow messageService, MessageRateLimiter rateLimiter, ITracer tracer, ChatSetting chatSetting) : ChatApiControllerBase
 {
-
     /// <summary>全文搜索消息内容。在当前用户的所有会话中按关键词检索</summary>
     /// <param name="keyword">搜索关键词</param>
     /// <param name="page">页码</param>
@@ -33,6 +29,7 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     public async Task<ActionResult<IReadOnlyList<MessageDto>>> QueryAsync([FromRoute] Int64 conversationId, CancellationToken cancellationToken)
     {
         var result = await chatService.GetMessagesAsync(conversationId, GetCurrentUserId(), cancellationToken).ConfigureAwait(false);
+        if (result == null) return NotFound();
         return Ok(result);
     }
 
@@ -46,11 +43,18 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     {
         // 速率限制检查：在设置 SSE 头之前返回 429，前端可直接解析 JSON
         var userId = GetCurrentUserId();
-        if (!rateLimiter.IsAllowed(userId, ChatSetting.Current.MaxMessagesPerMinute))
+        if (!rateLimiter.IsAllowed(userId, chatSetting.MaxMessagesPerMinute))
         {
             Response.StatusCode = 429;
             Response.ContentType = "application/json";
             await Response.WriteAsync("{\"code\":\"RATE_LIMITED\",\"message\":\"请求过于频繁，请稍后再试\"}", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // 会话归属校验：必须在 SetSseHeaders() 之前，否则无法返回正确状态码
+        if (!chatService.CanAccessConversation(conversationId, userId))
+        {
+            Response.StatusCode = 404;
             return;
         }
 
@@ -68,7 +72,7 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     [HttpPut("messages/{id:long}")]
     public async Task<ActionResult<MessageDto>> EditAsync([FromRoute] Int64 id, [FromBody] EditMessageRequest request, CancellationToken cancellationToken)
     {
-        var result = await chatService.EditMessageAsync(id, request, cancellationToken).ConfigureAwait(false);
+        var result = await chatService.EditMessageAsync(id, request, GetCurrentUserId(), cancellationToken).ConfigureAwait(false);
         if (result == null) return NotFound();
         return Ok(result);
     }
@@ -81,9 +85,17 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     [HttpPost("messages/{id:long}/edit-and-resend")]
     public async Task EditAndResendStreamAsync([FromRoute] Int64 id, [FromBody] EditMessageRequest request, CancellationToken cancellationToken)
     {
+        var userId = GetCurrentUserId();
+        // 消息归属校验：必须在 SetSseHeaders() 之前，否则无法返回正确状态码
+        if (!chatService.CanAccessMessage(id, userId))
+        {
+            Response.StatusCode = 404;
+            return;
+        }
+
         using var span = tracer?.NewSpan("ai:ResendStream", new { id, request.Content });
         SetSseHeaders();
-        await StreamEventsAsync(messageService.EditAndResendStreamAsync(id, request.Content, GetCurrentUserId(), cancellationToken), cancellationToken).ConfigureAwait(false);
+        await StreamEventsAsync(messageService.EditAndResendStreamAsync(id, request.Content, userId, cancellationToken), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>重新生成回复（非流式）</summary>
@@ -106,9 +118,17 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     [HttpPost("messages/{id:long}/regenerate/stream")]
     public async Task StreamRegenerateAsync([FromRoute] Int64 id, CancellationToken cancellationToken)
     {
+        var userId = GetCurrentUserId();
+        // 消息归属校验：必须在 SetSseHeaders() 之前，否则无法返回正确状态码
+        if (!chatService.CanAccessMessage(id, userId))
+        {
+            Response.StatusCode = 404;
+            return;
+        }
+
         using var span = tracer?.NewSpan("ai:StreamRegenerate", id);
         SetSseHeaders();
-        await StreamEventsAsync(messageService.RegenerateStreamAsync(id, GetCurrentUserId(), cancellationToken), cancellationToken).ConfigureAwait(false);
+        await StreamEventsAsync(messageService.RegenerateStreamAsync(id, userId, cancellationToken), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>停止生成</summary>
@@ -118,6 +138,7 @@ public class MessagesController(ChatApplicationService chatService, MessageServi
     [HttpPost("messages/{id:long}/stop")]
     public async Task<IActionResult> StopAsync([FromRoute] Int64 id, CancellationToken cancellationToken)
     {
+        if (!chatService.CanAccessMessage(id, GetCurrentUserId())) return NotFound();
         await messageService.StopGenerateAsync(id, cancellationToken).ConfigureAwait(false);
         return Accepted();
     }

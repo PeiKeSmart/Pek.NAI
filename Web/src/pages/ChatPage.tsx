@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSettingsStore, useArtifactStore } from '@/stores'
+import { useSettingsStore } from '@/stores'
 import { Icon } from '@/components/common/Icon'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import { ChatInput } from '@/components/input/ChatInput'
@@ -10,7 +10,6 @@ import { ThinkingBlock } from '@/components/chat/ThinkingBlock'
 import { ToolCallBadge } from '@/components/chat/ToolCallBadge'
 import { ShareDialog } from '@/components/chat/ShareDialog'
 import { DislikeReasonDialog } from '@/components/chat/DislikeReasonDialog'
-import { ArtifactPanel } from '@/components/chat/ArtifactPanel'
 
 type ThinkingMode = 'fast' | 'auto' | 'think'
 
@@ -74,7 +73,8 @@ export function ChatPage({
   const userScrolledRef = useRef(false)
   const [showBackToBottom, setShowBackToBottom] = useState(false)
   const contentWidth = useSettingsStore((s) => s.contentWidth) ?? 960
-  const artifactOpen = useArtifactStore((s) => s.current !== null)
+  const thinkingCollapsed = useSettingsStore((s) => s.thinkingCollapsed) ?? false
+  const updateSettings = useSettingsStore((s) => s.update)
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [showShareDialog, setShowShareDialog] = useState(false)
   const [dislikeTargetId, setDislikeTargetId] = useState<string | null>(null)
@@ -121,9 +121,9 @@ export function ChatPage({
 
   return (
     <div className="relative flex flex-1 min-h-0">
-    <div
-      className="relative flex flex-col flex-1 min-h-0"
-    >
+      <div
+        className="relative flex flex-col flex-1 min-h-0"
+      >
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -153,6 +153,8 @@ export function ChatPage({
                         content={seg.content}
                         isStreaming={isLastSegmentStreaming && i === msg.thinkingSegments!.length - 1}
                         thinkingTime={seg.thinkingTime}
+                        defaultCollapsed={thinkingCollapsed}
+                        onCollapsedChange={(v) => updateSettings({ thinkingCollapsed: v })}
                       />
                       {i === 0 && msg.toolCalls && msg.toolCalls.length > 0 && (
                         <div className="flex items-center flex-wrap gap-2 mb-4">
@@ -172,6 +174,8 @@ export function ChatPage({
                   content={msg.thinkingContent}
                   isStreaming={msg.status === 'streaming' && !msg.content}
                   thinkingTime={msg.thinkingTime}
+                  defaultCollapsed={thinkingCollapsed}
+                  onCollapsedChange={(v) => updateSettings({ thinkingCollapsed: v })}
                 />
               )
             }
@@ -230,14 +234,14 @@ export function ChatPage({
       {showBackToBottom && (
         <button
           onClick={handleBackToBottom}
-          className="absolute bottom-32 right-6 z-30 w-10 h-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-md flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all"
+          className="absolute bottom-32 right-6 z-20 w-10 h-10 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-md flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all"
           title={t('chat.backToBottom')}
         >
           <Icon name="keyboard_arrow_down" variant="outlined" size="xl" />
         </button>
       )}
 
-      <div className="absolute bottom-0 left-0 w-full pb-6 pt-2 px-4 bg-gradient-to-t from-white via-white to-transparent dark:from-background-dark dark:via-background-dark z-20">
+      <div className="absolute bottom-0 left-0 w-full pb-6 pt-2 px-4 max-md:pb-3 max-md:px-2 bg-gradient-to-t from-white via-white to-transparent dark:from-background-dark dark:via-background-dark z-30">
         <input
           ref={fileInputRef}
           type="file"
@@ -280,8 +284,7 @@ export function ChatPage({
           conversationId={conversationId}
         />
       )}
-    </div>
-    {artifactOpen && <ArtifactPanel />}
+      </div>
     </div>
   )
 }

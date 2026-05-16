@@ -10,7 +10,7 @@ using XCode.Membership;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>会话。一次完整的多轮对话上下文</summary>
-[Menu(160, false, Icon = "fa-table")]
+[Menu(160, true, Icon = "fa-table")]
 [ChatAIArea]
 public class ConversationController : ChatEntityController<Conversation>
 {
@@ -68,12 +68,13 @@ public class ConversationController : ChatEntityController<Conversation>
         var userId = p["userId"].ToInt(-1);
         var isPinned = p["isPinned"]?.ToBoolean();
         var thinkingMode = (ThinkingMode)p["thinkingMode"].ToInt(-1);
+        var appKeyId = p["appKeyId"].ToInt(-1);
         var modelId = p["modelId"].ToInt(-1);
         var skillId = p["skillId"].ToInt(-1);
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return Conversation.Search(userId, isPinned, p["source"], modelId, skillId, thinkingMode, start, end, p["Q"], p);
+        return Conversation.Search(userId, isPinned, p["source"], appKeyId, modelId, skillId, thinkingMode, start, end, p["Q"], p);
     }
 }

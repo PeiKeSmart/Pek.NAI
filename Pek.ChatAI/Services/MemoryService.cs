@@ -1,6 +1,4 @@
 ﻿using System.Text;
-using NewLife.ChatAI.Entity;
-using NewLife.ChatAI.Models;
 using NewLife.Log;
 
 namespace NewLife.ChatAI.Services;
@@ -13,10 +11,10 @@ public class MemoryService(ITracer tracer, ILog log)
 {
     #region 属性
     /// <summary>注入系统提示词时每类记忆的最大条数</summary>
-    private const Int32 MaxMemoriesPerCategory = 10;
+    protected const Int32 MaxMemoriesPerCategory = 10;
 
     /// <summary>注入系统提示词时记忆总条数上限</summary>
-    private const Int32 MaxTotalMemories = 30;
+    protected const Int32 MaxTotalMemories = 30;
     #endregion
 
     #region 分类规范化
@@ -113,7 +111,7 @@ public class MemoryService(ITracer tracer, ILog log)
     /// <param name="conversationId">来源会话ID</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>保存后的记忆实体</returns>
-    public async Task<UserMemory> UpsertMemoryAsync(
+    public virtual async Task<UserMemory> UpsertMemoryAsync(
         Int32 userId,
         String category,
         String key,
@@ -133,7 +131,6 @@ public class MemoryService(ITracer tracer, ILog log)
             // 只有置信度更高或内容变化时才更新
             if (existing.Confidence < confidence || !existing.Value.EqualIgnoreCase(value))
             {
-                var oldValue = existing.Value;
                 existing.Category = category;
                 existing.Value = value;
                 existing.Confidence = confidence;
@@ -145,7 +142,7 @@ public class MemoryService(ITracer tracer, ILog log)
             return existing;
         }
 
-        // 新记忆：根据信任等级决定是否需要审核
+        // 新记忆
         var memory = new UserMemory
         {
             UserId = userId,
@@ -219,37 +216,6 @@ public class MemoryService(ITracer tracer, ILog log)
         return UserMemory.FindAllByUserIdAndCategory(userId, category);
     }
 
-    /// <summary>获取用户有效记忆的分页列表</summary>
-    /// <param name="userId">用户ID</param>
-    /// <param name="category">分类过滤（可选）</param>
-    /// <param name="page">页码（从1开始）</param>
-    /// <param name="pageSize">每页条数</param>
-    /// <returns>分页记忆列表</returns>
-    public MemoryListDto GetActiveMemoriesPaged(Int32 userId, String? category, Int32 page, Int32 pageSize)
-    {
-        var memories = category.IsNullOrEmpty()
-            ? GetActiveMemories(userId)
-            : GetMemoriesByCategory(userId, category!);
-
-        var total = memories.Count;
-        var items = memories
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(m => new MemoryItemDto
-            {
-                Id = m.Id,
-                Category = m.Category,
-                Key = m.Key,
-                Value = m.Value,
-                Confidence = m.Confidence,
-                Enable = m.Enable,
-                CreateTime = m.CreateTime,
-                UpdateTime = m.UpdateTime,
-            })
-            .ToList();
-
-        return new MemoryListDto { Total = total, Items = items, Page = page, PageSize = pageSize };
-    }
     #endregion
 
     #region 上下文构建

@@ -5,10 +5,8 @@ using NewLife.AI.Clients;
 using NewLife.AI.Clients.Anthropic;
 using NewLife.AI.Clients.Gemini;
 using NewLife.AI.Clients.OpenAI;
-using NewLife.AI.Models;
+using NewLife.AI.Embedding;
 using NewLife.ChatAI.Filters;
-using NewLife.ChatAI.Services;
-using ChatMessage = NewLife.AI.Models.ChatMessage;
 
 namespace NewLife.ChatAI.Controllers;
 
@@ -18,7 +16,7 @@ namespace NewLife.ChatAI.Controllers;
 /// 通过 Authorization: Bearer {appkey} 进行认证。
 /// </remarks>
 [ApiController]
-public class GatewayController(GatewayService gatewayService, ModelService modelService, IChatPipeline pipeline) : ControllerBase
+public class GatewayController(GatewayService gatewayService, ModelService modelService, ChatSetting chatSetting, GatewayMessageFlow gatewayMessageFlow) : ControllerBase
 {
     #region 模型列表
     /// <summary>列出当前密钥可使用的模型。兼容 OpenAI GET /v1/models 协议</summary>
@@ -47,11 +45,11 @@ public class GatewayController(GatewayService gatewayService, ModelService model
                 ["owned_by"] = ownedBy,
                 ["context_length"] = m.ContextLength,
                 ["support_thinking"] = m.SupportThinking,
-                ["support_function_calling"] = m.SupportFunctionCalling,
+                ["support_function"] = m.SupportFunction,
                 ["support_vision"] = m.SupportVision,
                 ["support_audio"] = m.SupportAudio,
-                ["support_image_generation"] = m.SupportImageGeneration,
-                ["support_video_generation"] = m.SupportVideoGeneration,
+                ["support_image"] = m.SupportImage,
+                ["support_video"] = m.SupportVideo,
             };
         }).ToList();
 
@@ -161,7 +159,7 @@ public class GatewayController(GatewayService gatewayService, ModelService model
             return StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{config.GetEffectiveProvider()}'" });
 
         // 通过 ChatCompletions 方式请求图像生成（兼容 OpenAI DALL-E 等通过聊天接口生成图像的场景）
-        var size = ChatSetting.Current.DefaultImageSize;
+        var size = chatSetting.DefaultImageSize;
         if (body.TryGetValue("size", out var sizeObj) && sizeObj != null)
             size = sizeObj.ToString()!;
 
@@ -169,7 +167,7 @@ public class GatewayController(GatewayService gatewayService, ModelService model
         {
             using var imageClient = modelService.CreateClient(config)!;
             var response = await imageClient.GetResponseAsync(
-                [new ChatMessage { Role = "user", Content = $"Generate an image: {prompt}. Size: {size}" }],
+                [new AiChatMessage { Role = "user", Content = $"Generate an image: {prompt}. Size: {size}" }],
                 null,
                 cancellationToken).ConfigureAwait(false);
 
@@ -209,8 +207,9 @@ public class GatewayController(GatewayService gatewayService, ModelService model
         var form = await Request.ReadFormAsync(cancellationToken).ConfigureAwait(false);
         var modelCode = form["model"].FirstOrDefault();
         var prompt = form["prompt"].FirstOrDefault();
-        var size = form["size"].FirstOrDefault() ?? ChatSetting.Current.DefaultImageSize;
+        var size = form["size"].FirstOrDefault() ?? chatSetting.DefaultImageSize;
         var imageFile = form.Files.GetFile("image");
+        var maskFile = form.Files.GetFile("mask");
 
         if (String.IsNullOrWhiteSpace(prompt))
             return BadRequest(new { code = "INVALID_REQUEST", message = "prompt 不能为空" });
@@ -219,66 +218,268 @@ public class GatewayController(GatewayService gatewayService, ModelService model
             return BadRequest(new { code = "INVALID_REQUEST", message = "image 文件不能为空" });
 
         // 路由到模型
-        var config = modelService.ResolveModelByCode(modelCode);
-        if (config == null)
+        var model = modelService.ResolveModelByCode(modelCode);
+        if (model == null)
             return NotFound(new { code = "MODEL_NOT_FOUND", message = $"未找到模型 '{modelCode}'" });
-        if (!modelService.IsModelAllowed(appKey, config))
+        if (!modelService.IsModelAllowed(appKey, model))
             return StatusCode(403, new { code = "MODEL_FORBIDDEN", message = $"当前密钥无权使用模型 '{modelCode}'" });
 
-        if (!modelService.IsAvailable(config))
-            return StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{config.GetEffectiveProvider()}'" });
+        if (!modelService.IsAvailable(model))
+            return StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{model.GetEffectiveProvider()}'" });
 
         try
         {
-            // 读取图片并编码为 base64 data URI
-            using var ms = new MemoryStream();
-            await imageFile.CopyToAsync(ms, cancellationToken).ConfigureAwait(false);
-            var imageBase64 = Convert.ToBase64String(ms.ToArray());
-            var mimeType = imageFile.ContentType ?? "image/png";
-            var dataUri = $"data:{mimeType};base64,{imageBase64}";
+            using var editClient = modelService.CreateClient(model)!;
+            if (editClient is not IImageClient imageClient)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{model.Code}' 不支持图像编辑" });
 
-            // 读取 mask 文件（可选）
-            var maskFile = form.Files.GetFile("mask");
-            String? maskInfo = null;
-            if (maskFile != null && maskFile.Length > 0)
+            using var imageStream = imageFile.OpenReadStream();
+            using var maskStream = maskFile != null && maskFile.Length > 0 ? maskFile.OpenReadStream() : null;
+
+            var response = await imageClient.EditImageAsync(new ImageEditsRequest
             {
-                using var maskMs = new MemoryStream();
-                await maskFile.CopyToAsync(maskMs, cancellationToken).ConfigureAwait(false);
-                maskInfo = $"data:{maskFile.ContentType ?? "image/png"};base64,{Convert.ToBase64String(maskMs.ToArray())}";
-            }
+                Model = model.GetEffectiveModelCode(),
+                Prompt = prompt!,
+                Size = size,
+                ImageStream = imageStream,
+                ImageFileName = String.IsNullOrWhiteSpace(imageFile.FileName) ? "image.png" : imageFile.FileName,
+                MaskStream = maskStream,
+                MaskFileName = maskFile != null && !String.IsNullOrWhiteSpace(maskFile.FileName) ? maskFile.FileName : "mask.png",
+            }, cancellationToken).ConfigureAwait(false);
 
-            // 构建多模态消息
-            var contentParts = new List<Object>
-            {
-                new { type = "text", text = $"Edit this image: {prompt}. Size: {size}" },
-                new { type = "image_url", image_url = new { url = dataUri } },
-            };
-            if (maskInfo != null)
-                contentParts.Add(new { type = "image_url", image_url = new { url = maskInfo } });
-
-            using var editClient = modelService.CreateClient(config)!;
-            var response = await editClient.GetResponseAsync(
-                [new ChatMessage { Role = "user", Content = contentParts }],
-                null,
-                cancellationToken).ConfigureAwait(false);
-
-            return Ok(new
-            {
-                created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                data = new[]
-                {
-                    new
-                    {
-                        revised_prompt = prompt,
-                        content = response.Messages?.FirstOrDefault()?.Message?.Content,
-                    }
-                }
-            });
+            return Ok(NormalizeImageEditResponse(response, prompt!));
         }
-        catch (HttpRequestException ex)
+        catch (NotSupportedException ex)
         {
-            return StatusCode(502, new { code = "IMAGE_GENERATION_FAILED", message = ex.Message });
+            return BadRequest(new { code = "MODEL_UNSUPPORTED", message = ex.Message });
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return StatusCode(502, new { code = "IMAGE_EDIT_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 嵌入向量
+    /// <summary>嵌入向量接口。兼容 OpenAI POST /v1/embeddings 协议</summary>
+    /// <param name="request">嵌入请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpPost("v1/embeddings")]
+    [SnakeCaseBody]
+    public async Task<IActionResult> EmbeddingsAsync([FromBody] EmbeddingRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null) return BadRequest(new { code = "INVALID_REQUEST", message = "请求体不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(request.Model);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not IEmbeddingClient ec)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{request.Model}' 不支持嵌入向量" });
+
+            var resp = await ec.GenerateAsync(request, cancellationToken).ConfigureAwait(false);
+            return Ok(resp);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "EMBEDDING_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 语音合成（TTS）
+    /// <summary>语音合成接口。兼容 OpenAI POST /v1/audio/speech 协议，返回 audio/mpeg 流</summary>
+    /// <param name="request">合成请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpPost("v1/audio/speech")]
+    [SnakeCaseBody]
+    public async Task<IActionResult> AudioSpeechAsync([FromBody] SpeechRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null) return BadRequest(new { code = "INVALID_REQUEST", message = "请求体不能为空" });
+        if (String.IsNullOrEmpty(request.Input)) return BadRequest(new { code = "INVALID_REQUEST", message = "input 不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(request.Model);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not ISpeechClient sc)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{request.Model}' 不支持语音合成" });
+
+            var bytes = await sc.SpeechAsync(request, cancellationToken).ConfigureAwait(false);
+            var contentType = (request.ResponseFormat ?? "mp3") switch
+            {
+                "wav" => "audio/wav",
+                "opus" => "audio/opus",
+                "aac" => "audio/aac",
+                "flac" => "audio/flac",
+                "pcm" => "audio/pcm",
+                _ => "audio/mpeg",
+            };
+            return File(bytes, contentType);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "SPEECH_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 语音识别（STT）
+    /// <summary>语音识别接口。兼容 OpenAI POST /v1/audio/transcriptions 协议（multipart/form-data）</summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpPost("v1/audio/transcriptions")]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> AudioTranscriptionsAsync(CancellationToken cancellationToken)
+    {
+        var form = await Request.ReadFormAsync(cancellationToken).ConfigureAwait(false);
+        var modelCode = form["model"].FirstOrDefault();
+        var file = form.Files.GetFile("file");
+
+        if (file == null || file.Length == 0)
+            return BadRequest(new { code = "INVALID_REQUEST", message = "file 不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(modelCode);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not ITranscriptionClient tc)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{modelCode}' 不支持语音识别" });
+
+            using var stream = file.OpenReadStream();
+            var req = new TranscriptionRequest
+            {
+                Model = modelCode,
+                File = stream,
+                FileName = file.FileName,
+                Language = form["language"].FirstOrDefault(),
+                Prompt = form["prompt"].FirstOrDefault(),
+                ResponseFormat = form["response_format"].FirstOrDefault(),
+                Temperature = Double.TryParse(form["temperature"].FirstOrDefault(), out var t) ? t : null,
+            };
+            var resp = await tc.TranscribeAsync(req, cancellationToken).ConfigureAwait(false);
+            return Ok(resp);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "TRANSCRIPTION_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 视频生成
+    /// <summary>提交视频生成任务。POST /v1/video/generations，返回 task_id</summary>
+    /// <param name="request">视频生成请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpPost("v1/video/generations")]
+    [SnakeCaseBody]
+    public async Task<IActionResult> VideoGenerationsAsync([FromBody] VideoGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null) return BadRequest(new { code = "INVALID_REQUEST", message = "请求体不能为空" });
+        if (String.IsNullOrEmpty(request.Prompt)) return BadRequest(new { code = "INVALID_REQUEST", message = "prompt 不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(request.Model);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not IVideoClient vc)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{request.Model}' 不支持视频生成" });
+
+            var resp = await vc.SubmitVideoGenerationAsync(request, cancellationToken).ConfigureAwait(false);
+            return Ok(resp);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "VIDEO_GENERATION_FAILED", message = ex.Message });
+        }
+    }
+
+    /// <summary>查询视频生成任务状态。GET /v1/video/generations/{taskId}?model=xxx</summary>
+    /// <param name="taskId">任务编号</param>
+    /// <param name="model">模型编码（用于定位服务商）</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpGet("v1/video/generations/{taskId}")]
+    public async Task<IActionResult> VideoTaskStatusAsync(String taskId, [FromQuery] String? model, CancellationToken cancellationToken)
+    {
+        if (String.IsNullOrEmpty(taskId)) return BadRequest(new { code = "INVALID_REQUEST", message = "taskId 不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(model);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not IVideoClient vc)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{model}' 不支持视频生成" });
+
+            var resp = await vc.GetVideoTaskAsync(taskId, cancellationToken).ConfigureAwait(false);
+            return Ok(resp);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "VIDEO_TASK_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 重排序
+    /// <summary>文档重排序。POST /v1/reranks（DashScope 兼容格式）</summary>
+    /// <param name="request">重排请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    [HttpPost("v1/reranks")]
+    [SnakeCaseBody]
+    public async Task<IActionResult> RerankAsync([FromBody] RerankRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null) return BadRequest(new { code = "INVALID_REQUEST", message = "请求体不能为空" });
+        if (String.IsNullOrEmpty(request.Query)) return BadRequest(new { code = "INVALID_REQUEST", message = "query 不能为空" });
+
+        var (forbid, config) = ValidateAndResolve(request.Model);
+        if (forbid != null) return forbid;
+
+        try
+        {
+            using var client = modelService.CreateClient(config!);
+            if (client is not IRerankClient rc)
+                return BadRequest(new { code = "MODEL_UNSUPPORTED", message = $"模型 '{request.Model}' 不支持重排序" });
+
+            var resp = await rc.RerankAsync(request, cancellationToken).ConfigureAwait(false);
+            return Ok(resp);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { code = "RERANK_FAILED", message = ex.Message });
+        }
+    }
+    #endregion
+
+    #region 通用校验
+    /// <summary>校验 AppKey 与模型可用性。返回 (错误响应, 模型配置)，错误响应不为空时调用方应直接 return</summary>
+    /// <param name="modelCode">模型编码</param>
+    /// <returns>错误响应或模型配置</returns>
+    private (IActionResult? error, NewLife.ChatAI.Entity.ModelConfig? config) ValidateAndResolve(String? modelCode)
+    {
+        var appKey = gatewayService.ValidateAppKey(Request.Headers.Authorization);
+        if (appKey == null)
+            return (Unauthorized(new { code = "INVALID_API_KEY", message = "AppKey 无效或已禁用" }), null);
+
+        var config = modelService.ResolveModelByCode(modelCode);
+        if (config == null)
+            return (NotFound(new { code = "MODEL_NOT_FOUND", message = $"未找到模型 '{modelCode}'" }), null);
+
+        if (!modelService.IsModelAllowed(appKey, config))
+            return (StatusCode(403, new { code = "MODEL_FORBIDDEN", message = $"当前密钥无权使用模型 '{modelCode}'" }), null);
+
+        if (!modelService.IsAvailable(config))
+            return (StatusCode(503, new { code = "MODEL_UNAVAILABLE", message = $"未找到服务商 '{config.GetEffectiveProvider()}'" }), null);
+
+        return (null, config);
     }
     #endregion
 
@@ -311,10 +512,9 @@ public class GatewayController(GatewayService gatewayService, ModelService model
         }
 
         // 网关对话记录：收集流式输出内容
-        var enableRecording = ChatSetting.Current.EnableGatewayRecording;
+        var enableRecording = chatSetting.EnableGatewayRecording;
         var contentBuilder = enableRecording ? new StringBuilder() : null;
         var thinkingBuilder = enableRecording ? new StringBuilder() : null;
-        UsageDetails? lastUsage = null;
 
         try
         {
@@ -324,6 +524,9 @@ public class GatewayController(GatewayService gatewayService, ModelService model
                 var conversationId = gatewayService.CreateGatewayConversation(request, config, appKey);
                 if (conversationId > 0) request.ConversationId = conversationId.ToString();
             }
+
+            var messages = gatewayService.BuildContextMessages(request, appKey, config);
+            var convId = request.ConversationId.ToLong();
 
             if (request.Stream)
             {
@@ -339,53 +542,21 @@ public class GatewayController(GatewayService gatewayService, ModelService model
                     await Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
 
-                if (ChatSetting.Current.EnableGatewayPipeline)
+                UsageDetails? lastUsage = null;
+                await foreach (var ev in gatewayMessageFlow.StreamGatewayAsync(messages, config, appKey.UserId, convId, cancellationToken).ConfigureAwait(false))
                 {
-                    // 完整能力管道路径：技能注入 + 工具调用 + 提示词管理
-                    var contextMessages = gatewayService.BuildContextMessages(request, appKey, config);
-                    var pipelineContext = new ChatPipelineContext { UserId = appKey.UserId.ToString(), ConversationId = request.ConversationId };
-
-                    await foreach (var evt in pipeline.StreamAsync(contextMessages, config, ThinkingMode.Auto, pipelineContext, cancellationToken).ConfigureAwait(false))
-                    {
-                        // 收集内容用于网关对话记录
-                        if (enableRecording)
-                        {
-                            if (evt.Type == "content_delta")
-                                contentBuilder!.Append(evt.Content);
-                            else if (evt.Type == "thinking_delta")
-                                thinkingBuilder!.Append(evt.Content);
-                        }
-
-                        // 收集最后一次用量
-                        if (evt.Usage != null) lastUsage = evt.Usage;
-
-                        var evtChunk = GatewayService.ConvertEventToChunk(evt, request.Model ?? config.Code);
-                        if (evtChunk != null)
-                            await WriteStreamChunkAsync(evtChunk, protocol, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    // 管道路径：在此写入用量记录（非管道路径由 ChatStreamAsync 内部写入）
                     if (enableRecording)
-                        gatewayService.RecordUsage(appKey, config.Id, request.ConversationId.ToLong(), lastUsage);
-                }
-                else
-                {
-                    await foreach (var chunk in gatewayService.ChatStreamAsync(request, config, appKey, cancellationToken).ConfigureAwait(false))
                     {
-                        // 收集内容用于网关对话记录
-                        if (enableRecording)
-                        {
-                            var text = chunk.Text;
-                            if (text != null) contentBuilder!.Append(text);
-                            var thinking = chunk.Messages?.FirstOrDefault()?.Delta?.ReasoningContent;
-                            if (thinking != null) thinkingBuilder!.Append(thinking);
-                        }
-
-                        // 收集最后一次用量
-                        if (chunk.Usage != null) lastUsage = chunk.Usage;
-
-                        await WriteStreamChunkAsync(chunk, protocol, cancellationToken).ConfigureAwait(false);
+                        if (ev.Type == "content_delta")
+                            contentBuilder!.Append(ev.Content);
+                        else if (ev.Type == "thinking_delta")
+                            thinkingBuilder!.Append(ev.Content);
                     }
+                    if (ev.Usage != null) lastUsage = ev.Usage;
+
+                    var chunk = GatewayService.ConvertEventToChunk(ev, request.Model ?? config.Code);
+                    if (chunk != null)
+                        await WriteStreamChunkAsync(chunk, protocol, cancellationToken).ConfigureAwait(false);
                 }
 
                 // 输出流式结束标记
@@ -394,17 +565,20 @@ public class GatewayController(GatewayService gatewayService, ModelService model
                     await Response.WriteAsync(endMarker, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
                 await Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-                // 网关对话记录
+                // 用量记录 + 网关对话记录
+                gatewayService.RecordUsage(appKey, config, convId, lastUsage);
                 if (enableRecording)
                     gatewayService.RecordGatewayConversation(request, config, appKey, contentBuilder!.ToString(), thinkingBuilder!.ToString(), lastUsage);
             }
             else
             {
-                var result = await gatewayService.ChatAsync(request, config, appKey, cancellationToken).ConfigureAwait(false);
+                // 非流式：聚合完整响应 → 写出 JSON → 用量/对话记录
+                var result = await gatewayMessageFlow.CompletionGatewayAsync(messages, config, appKey.UserId, convId, cancellationToken).ConfigureAwait(false);
                 Response.ContentType = "application/json";
                 await Response.WriteAsync(GatewayService.FormatResponse(result, protocol), Encoding.UTF8, cancellationToken).ConfigureAwait(false);
 
-                // 网关对话记录
+                // 用量记录 + 网关对话记录
+                gatewayService.RecordUsage(appKey, config, convId, result.Usage);
                 if (enableRecording)
                 {
                     var thinking = result.Messages?.FirstOrDefault()?.Message?.ReasoningContent;
@@ -460,6 +634,47 @@ public class GatewayController(GatewayService gatewayService, ModelService model
             error["traceId"] = traceId;
 
         await Response.WriteAsync(JsonSerializer.Serialize(error, GatewayService.SnakeCaseOptions), Encoding.UTF8).ConfigureAwait(false);
+    }
+
+    private static Object NormalizeImageEditResponse(ImageGenerationResponse? response, String prompt)
+    {
+        var created = response?.Created > DateTime.MinValue
+            ? new DateTimeOffset(response.Created.ToUniversalTime()).ToUnixTimeSeconds()
+            : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        var data = response?.Data?.Select(item => new
+        {
+            revised_prompt = item.RevisedPrompt ?? prompt,
+            content = GetImageContent(item),
+            url = item.Url,
+            b64_json = item.B64Json,
+        }).ToArray();
+
+        return new
+        {
+            created,
+            data = data is { Length: > 0 }
+                ? data
+                : new[]
+                {
+                    new
+                    {
+                        revised_prompt = prompt,
+                        content = (String?)null,
+                        url = (String?)null,
+                        b64_json = (String?)null,
+                    }
+                }
+        };
+    }
+
+    private static String? GetImageContent(ImageData item)
+    {
+        if (!String.IsNullOrWhiteSpace(item.Content)) return item.Content;
+        if (!String.IsNullOrWhiteSpace(item.Url)) return item.Url;
+        if (!String.IsNullOrWhiteSpace(item.B64Json)) return $"data:image/png;base64,{item.B64Json}";
+
+        return null;
     }
     #endregion
 }

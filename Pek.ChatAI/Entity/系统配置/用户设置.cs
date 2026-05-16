@@ -150,6 +150,14 @@ public partial class UserSetting
     [BindColumn("ShowToolCalls", "显示工具调用。是否在对话中显示工具调用的入参和出参详情", "")]
     public Boolean ShowToolCalls { get => _ShowToolCalls; set { if (OnPropertyChanging("ShowToolCalls", value)) { _ShowToolCalls = value; OnPropertyChanged("ShowToolCalls"); } } }
 
+    private Boolean _ThinkingCollapsed;
+    /// <summary>思考过程收缩。默认是否收缩展示思考过程，默认展开</summary>
+    [DisplayName("思考过程收缩")]
+    [Description("思考过程收缩。默认是否收缩展示思考过程，默认展开")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("ThinkingCollapsed", "思考过程收缩。默认是否收缩展示思考过程，默认展开", "")]
+    public Boolean ThinkingCollapsed { get => _ThinkingCollapsed; set { if (OnPropertyChanging("ThinkingCollapsed", value)) { _ThinkingCollapsed = value; OnPropertyChanged("ThinkingCollapsed"); } } }
+
     private String? _DefaultSkill;
     /// <summary>默认技能。新会话的默认技能编码</summary>
     [DisplayName("默认技能")]
@@ -158,14 +166,6 @@ public partial class UserSetting
     [BindColumn("DefaultSkill", "默认技能。新会话的默认技能编码", "")]
     public String? DefaultSkill { get => _DefaultSkill; set { if (OnPropertyChanging("DefaultSkill", value)) { _DefaultSkill = value; OnPropertyChanged("DefaultSkill"); } } }
 
-    private Int32 _StreamingSpeed;
-    /// <summary>流式速度。流式输出速度等级，1~5，默认3</summary>
-    [DisplayName("流式速度")]
-    [Description("流式速度。流式输出速度等级，1~5，默认3")]
-    [DataObjectField(false, false, false, 0)]
-    [BindColumn("StreamingSpeed", "流式速度。流式输出速度等级，1~5，默认3", "")]
-    public Int32 StreamingSpeed { get => _StreamingSpeed; set { if (OnPropertyChanging("StreamingSpeed", value)) { _StreamingSpeed = value; OnPropertyChanged("StreamingSpeed"); } } }
-
     private Boolean _EnableLearning;
     /// <summary>启用个人学习。用户级自学习开关，全局开关开启后此项生效</summary>
     [DisplayName("启用个人学习")]
@@ -173,22 +173,6 @@ public partial class UserSetting
     [DataObjectField(false, false, false, 0)]
     [BindColumn("EnableLearning", "启用个人学习。用户级自学习开关，全局开关开启后此项生效", "", DefaultValue = "true")]
     public Boolean EnableLearning { get => _EnableLearning; set { if (OnPropertyChanging("EnableLearning", value)) { _EnableLearning = value; OnPropertyChanged("EnableLearning"); } } }
-
-    private String? _LearningModel;
-    /// <summary>学习模型。用户自选的记忆提取模型，为空则使用系统配置</summary>
-    [DisplayName("学习模型")]
-    [Description("学习模型。用户自选的记忆提取模型，为空则使用系统配置")]
-    [DataObjectField(false, false, true, 50)]
-    [BindColumn("LearningModel", "学习模型。用户自选的记忆提取模型，为空则使用系统配置", "")]
-    public String? LearningModel { get => _LearningModel; set { if (OnPropertyChanging("LearningModel", value)) { _LearningModel = value; OnPropertyChanged("LearningModel"); } } }
-
-    private Int32 _MemoryInjectNum;
-    /// <summary>记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置</summary>
-    [DisplayName("记忆注入条数")]
-    [Description("记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置")]
-    [DataObjectField(false, false, false, 0)]
-    [BindColumn("MemoryInjectNum", "记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置", "")]
-    public Int32 MemoryInjectNum { get => _MemoryInjectNum; set { if (OnPropertyChanging("MemoryInjectNum", value)) { _MemoryInjectNum = value; OnPropertyChanged("MemoryInjectNum"); } } }
 
     private Int32 _ContentWidth;
     /// <summary>内容区宽度。标准960/宽屏1200/自适应0</summary>
@@ -277,11 +261,9 @@ public partial class UserSetting
             "AllowTraining" => _AllowTraining,
             "McpEnabled" => _McpEnabled,
             "ShowToolCalls" => _ShowToolCalls,
+            "ThinkingCollapsed" => _ThinkingCollapsed,
             "DefaultSkill" => _DefaultSkill,
-            "StreamingSpeed" => _StreamingSpeed,
             "EnableLearning" => _EnableLearning,
-            "LearningModel" => _LearningModel,
-            "MemoryInjectNum" => _MemoryInjectNum,
             "ContentWidth" => _ContentWidth,
             "CreateUserID" => _CreateUserID,
             "CreateIP" => _CreateIP,
@@ -311,11 +293,9 @@ public partial class UserSetting
                 case "AllowTraining": _AllowTraining = value.ToBoolean(); break;
                 case "McpEnabled": _McpEnabled = value.ToBoolean(); break;
                 case "ShowToolCalls": _ShowToolCalls = value.ToBoolean(); break;
+                case "ThinkingCollapsed": _ThinkingCollapsed = value.ToBoolean(); break;
                 case "DefaultSkill": _DefaultSkill = Convert.ToString(value); break;
-                case "StreamingSpeed": _StreamingSpeed = value.ToInt(); break;
                 case "EnableLearning": _EnableLearning = value.ToBoolean(); break;
-                case "LearningModel": _LearningModel = Convert.ToString(value); break;
-                case "MemoryInjectNum": _MemoryInjectNum = value.ToInt(); break;
                 case "ContentWidth": _ContentWidth = value.ToInt(); break;
                 case "CreateUserID": _CreateUserID = value.ToInt(); break;
                 case "CreateIP": _CreateIP = Convert.ToString(value); break;
@@ -379,13 +359,14 @@ public partial class UserSetting
     /// <param name="allowTraining">允许训练。是否允许反馈数据用于模型改进</param>
     /// <param name="mcpEnabled">启用MCP。是否启用MCP工具调用</param>
     /// <param name="showToolCalls">显示工具调用。是否在对话中显示工具调用的入参和出参详情</param>
+    /// <param name="thinkingCollapsed">思考过程收缩。默认是否收缩展示思考过程，默认展开</param>
     /// <param name="enableLearning">启用个人学习。用户级自学习开关，全局开关开启后此项生效</param>
     /// <param name="start">更新时间开始</param>
     /// <param name="end">更新时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<UserSetting> Search(Int32 userId, NewLife.AI.Models.ThinkingMode defaultThinkingMode, NewLife.AI.Models.ResponseStyle responseStyle, Boolean? allowTraining, Boolean? mcpEnabled, Boolean? showToolCalls, Boolean? enableLearning, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<UserSetting> Search(Int32 userId, NewLife.AI.Models.ThinkingMode defaultThinkingMode, NewLife.AI.Models.ResponseStyle responseStyle, Boolean? allowTraining, Boolean? mcpEnabled, Boolean? showToolCalls, Boolean? thinkingCollapsed, Boolean? enableLearning, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
@@ -395,6 +376,7 @@ public partial class UserSetting
         if (allowTraining != null) exp &= _.AllowTraining == allowTraining;
         if (mcpEnabled != null) exp &= _.McpEnabled == mcpEnabled;
         if (showToolCalls != null) exp &= _.ShowToolCalls == showToolCalls;
+        if (thinkingCollapsed != null) exp &= _.ThinkingCollapsed == thinkingCollapsed;
         if (enableLearning != null) exp &= _.EnableLearning == enableLearning;
         exp &= _.UpdateTime.Between(start, end);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
@@ -455,20 +437,14 @@ public partial class UserSetting
         /// <summary>显示工具调用。是否在对话中显示工具调用的入参和出参详情</summary>
         public static readonly Field ShowToolCalls = FindByName("ShowToolCalls");
 
+        /// <summary>思考过程收缩。默认是否收缩展示思考过程，默认展开</summary>
+        public static readonly Field ThinkingCollapsed = FindByName("ThinkingCollapsed");
+
         /// <summary>默认技能。新会话的默认技能编码</summary>
         public static readonly Field DefaultSkill = FindByName("DefaultSkill");
 
-        /// <summary>流式速度。流式输出速度等级，1~5，默认3</summary>
-        public static readonly Field StreamingSpeed = FindByName("StreamingSpeed");
-
         /// <summary>启用个人学习。用户级自学习开关，全局开关开启后此项生效</summary>
         public static readonly Field EnableLearning = FindByName("EnableLearning");
-
-        /// <summary>学习模型。用户自选的记忆提取模型，为空则使用系统配置</summary>
-        public static readonly Field LearningModel = FindByName("LearningModel");
-
-        /// <summary>记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置</summary>
-        public static readonly Field MemoryInjectNum = FindByName("MemoryInjectNum");
 
         /// <summary>内容区宽度。标准960/宽屏1200/自适应0</summary>
         public static readonly Field ContentWidth = FindByName("ContentWidth");
@@ -545,20 +521,14 @@ public partial class UserSetting
         /// <summary>显示工具调用。是否在对话中显示工具调用的入参和出参详情</summary>
         public const String ShowToolCalls = "ShowToolCalls";
 
+        /// <summary>思考过程收缩。默认是否收缩展示思考过程，默认展开</summary>
+        public const String ThinkingCollapsed = "ThinkingCollapsed";
+
         /// <summary>默认技能。新会话的默认技能编码</summary>
         public const String DefaultSkill = "DefaultSkill";
 
-        /// <summary>流式速度。流式输出速度等级，1~5，默认3</summary>
-        public const String StreamingSpeed = "StreamingSpeed";
-
         /// <summary>启用个人学习。用户级自学习开关，全局开关开启后此项生效</summary>
         public const String EnableLearning = "EnableLearning";
-
-        /// <summary>学习模型。用户自选的记忆提取模型，为空则使用系统配置</summary>
-        public const String LearningModel = "LearningModel";
-
-        /// <summary>记忆注入条数。用户自定义每次对话注入的记忆上限，0 表示使用系统配置</summary>
-        public const String MemoryInjectNum = "MemoryInjectNum";
 
         /// <summary>内容区宽度。标准960/宽屏1200/自适应0</summary>
         public const String ContentWidth = "ContentWidth";

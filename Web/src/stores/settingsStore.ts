@@ -47,9 +47,10 @@ const defaults: UserSettings = {
   systemPrompt: '',
   mcpEnabled: true,
   showToolCalls: false,
-  streamingSpeed: 3,
   allowTraining: false,
+  enableLearning: true,
   contentWidth: 960,
+  thinkingCollapsed: false,
 }
 
 export const useSettingsStore = create<SettingsState>()(

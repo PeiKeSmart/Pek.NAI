@@ -108,12 +108,15 @@ public class ChatCompletionRequest : IChatRequest
         var messages = new List<ChatMessage>();
         foreach (var msg in request.Messages)
         {
+            if (ShouldSkipAssistantMessage(msg)) continue;
+
             var cm = new ChatMessage
             {
                 Role = msg.Role,
                 Name = msg.Name,
                 ToolCallId = msg.ToolCallId,
                 ToolCalls = msg.ToolCalls,
+                ReasoningContent = msg.ReasoningContent,
             };
 
             if (msg.Contents != null && msg.Contents.Count > 0)
@@ -145,6 +148,8 @@ public class ChatCompletionRequest : IChatRequest
         var messages = new List<Object>(request.Messages.Count);
         foreach (var msg in request.Messages)
         {
+            if (ShouldSkipAssistantMessage(msg)) continue;
+
             var m = new Dictionary<String, Object> { ["role"] = msg.Role };
 
             // 多模态内容（Contents）优先于原始 Content 字段
@@ -155,6 +160,8 @@ public class ChatCompletionRequest : IChatRequest
 
             if (!msg.Name.IsNullOrEmpty()) m["name"] = msg.Name!;
             if (!msg.ToolCallId.IsNullOrEmpty()) m["tool_call_id"] = msg.ToolCallId!;
+            // DeepSeek 思考模式：有工具调用的 assistant 轮次必须回传 reasoning_content，否则返回 400
+            if (!msg.ReasoningContent.IsNullOrEmpty()) m["reasoning_content"] = msg.ReasoningContent!;
 
             if (msg.ToolCalls != null && msg.ToolCalls.Count > 0)
             {
@@ -173,7 +180,8 @@ public class ChatCompletionRequest : IChatRequest
             }
             messages.Add(m);
         }
-        dic["messages"] = messages;
+        // 内容放到最后，方便在埋点上查看参数
+        //dic["messages"] = messages;
 
         // stream 与 stream_options 仅在 stream=true 时写入；非流式请求不含这两个字段，避免 qwen-max 等模型的严格校验
         if (request.Stream)
@@ -212,8 +220,22 @@ public class ChatCompletionRequest : IChatRequest
         if (request.EnableThinking != null) dic["enable_thinking"] = request.EnableThinking.Value;
         if (request.ResponseFormat != null) dic["response_format"] = request.ResponseFormat;
         if (request.ParallelToolCalls != null) dic["parallel_tool_calls"] = request.ParallelToolCalls.Value;
+        dic["messages"] = messages;
 
         return dic;
+    }
+
+    /// <summary>判断是否应跳过非法 assistant 消息。某些服务商（如 DeepSeek）要求 assistant 至少提供 content 或 tool_calls</summary>
+    /// <param name="message">待检查消息</param>
+    /// <returns>应跳过返回 true，否则返回 false</returns>
+    private static Boolean ShouldSkipAssistantMessage(ChatMessage message)
+    {
+        if (!message.Role.EqualIgnoreCase("assistant")) return false;
+
+        var hasContent = message.Contents != null && message.Contents.Count > 0 || message.Content != null;
+        var hasToolCalls = message.ToolCalls != null && message.ToolCalls.Count > 0;
+
+        return !hasContent && !hasToolCalls;
     }
 
     /// <summary>将 AIContent 集合转换为 OpenAI 格式的 content 字段值</summary>
@@ -221,7 +243,8 @@ public class ChatCompletionRequest : IChatRequest
     /// <returns>字符串（单一文本）或内容数组（多模态）</returns>
     public static Object BuildContent(IList<AIContent> contents)
     {
-        if (contents.Count == 1 && contents[0] is TextContent singleText)
+        // 单一纯文本且无缓存标记时直接返回字符串，省去数组封装
+        if (contents.Count == 1 && contents[0] is TextContent singleText && singleText.CacheControl.IsNullOrEmpty())
             return singleText.Text;
 
         var parts = new List<Object>(contents.Count);
@@ -229,7 +252,10 @@ public class ChatCompletionRequest : IChatRequest
         {
             if (item is TextContent text)
             {
-                parts.Add(new Dictionary<String, Object> { ["type"] = "text", ["text"] = text.Text });
+                var textDic = new Dictionary<String, Object> { ["type"] = "text", ["text"] = text.Text };
+                if (!text.CacheControl.IsNullOrEmpty())
+                    textDic["cache_control"] = new Dictionary<String, Object> { ["type"] = text.CacheControl! };
+                parts.Add(textDic);
             }
             else if (item is ImageContent img)
             {
@@ -242,6 +268,22 @@ public class ChatCompletionRequest : IChatRequest
                 var imgDic = new Dictionary<String, Object> { ["url"] = url };
                 if (img.Detail != null) imgDic["detail"] = img.Detail;
                 parts.Add(new Dictionary<String, Object> { ["type"] = "image_url", ["image_url"] = imgDic });
+            }
+            else if (item is AudioContent audio)
+            {
+                // Omni 模型音频输入格式：{"type":"input_audio","input_audio":{"data":"...","format":"wav"}}
+                String audioData;
+                if (audio.Data != null && audio.Data.Length > 0)
+                    audioData = Convert.ToBase64String(audio.Data);
+                else
+                    audioData = audio.Uri ?? "";
+
+                // MediaType 如 "audio/wav" → "wav"；MediaType 为空则默认 "wav"
+                var mediaType = audio.MediaType ?? "audio/wav";
+                var format = mediaType.Contains('/') ? mediaType.Split('/')[^1] : mediaType;
+
+                var audioDic = new Dictionary<String, Object> { ["data"] = audioData, ["format"] = format };
+                parts.Add(new Dictionary<String, Object> { ["type"] = "input_audio", ["input_audio"] = audioDic });
             }
         }
         return parts;

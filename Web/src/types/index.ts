@@ -51,11 +51,11 @@ export interface ModelInfo {
   name: string
   provider?: string
   supportThinking?: boolean
-  supportFunctionCalling?: boolean
+  supportFunction?: boolean
   supportVision?: boolean
   supportAudio?: boolean
-  supportImageGeneration?: boolean
-  supportVideoGeneration?: boolean
+  supportImage?: boolean
+  supportVideo?: boolean
   contextLength?: number
 }
 
@@ -65,15 +65,6 @@ export interface Attachment {
   size: number
   type: 'pdf' | 'image' | 'file'
   previewUrl?: string
-}
-
-export interface Artifact {
-  /** 代码块语言标识 */
-  language: string
-  /** 代码/HTML 源码 */
-  code: string
-  /** 显示标题（取自代码块首行注释或语言名） */
-  title?: string
 }
 
 export interface UserSettings {
@@ -90,8 +81,39 @@ export interface UserSettings {
   systemPrompt: string
   mcpEnabled: boolean
   showToolCalls: boolean
-  streamingSpeed: number
   allowTraining: boolean
+  enableLearning: boolean
   defaultSkill?: string
   contentWidth?: number
+  thinkingCollapsed?: boolean
+}
+
+
+export interface ProviderItem {
+  id: number
+  name: string
+  protocol: string
+  endpoint?: string
+  apiKeyMasked?: string
+  enable: boolean
+  sort: number
+  remark?: string
+  modelCount?: number
+}
+
+export interface ModelManageItem {
+  id: number
+  providerId: number
+  code: string
+  name: string
+  enable: boolean
+  sort: number
+  contextLength: number
+  supportThinking: boolean
+  supportFunction: boolean
+  supportVision: boolean
+  supportAudio: boolean
+  supportImage: boolean
+  supportVideo: boolean
+  remark?: string
 }

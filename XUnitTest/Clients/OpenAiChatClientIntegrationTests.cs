@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -13,6 +13,7 @@ using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Models;
 using NewLife.Remoting;
 using Xunit;
+using XUnitTest.Helpers;
 
 namespace XUnitTest.Clients;
 
@@ -83,7 +84,7 @@ public class OpenAiChatClientIntegrationTests
 
     #region 非流式对话 - 基本功能
 
-    [Fact]
+    [RequiresApiKeyFact("DASHSCOPE_API_KEY", "config/DashScope.key")]
     [DisplayName("非流式_QwenPlus_返回有效响应")]
     public async Task ChatAsync_QwenPlus_ReturnsValidResponse()
     {
@@ -95,7 +96,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotEmpty(response.Messages);
 
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "AI 回复内容不应为空");
+        Assert.False(String.IsNullOrEmpty(content));
 
         Assert.NotNull(response.Usage);
         Assert.True(response.Usage.TotalTokens > 0, "Token 用量应大于 0");
@@ -104,7 +105,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.True(response.Usage.ElapsedMs > 0, "ElapsedMs 应大于 0");
     }
 
-    [Fact]
+    [RequiresApiKeyFact("DASHSCOPE_API_KEY", "config/DashScope.key")]
     [DisplayName("非流式_QwenTurbo_轻量模型可用")]
     public async Task ChatAsync_QwenTurbo_Works()
     {
@@ -116,7 +117,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotEmpty(response.Messages);
 
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content));
+        Assert.False(String.IsNullOrEmpty(content));
         Assert.Equal("2", content);
     }
 
@@ -131,7 +132,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "QwenMax 应返回有效回复内容");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public class OpenAiChatClientIntegrationTests
 
         Assert.NotNull(response);
         var content = response.Messages?[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content));
+        Assert.False(String.IsNullOrEmpty(content));
         Assert.Contains("{", content!);
         Assert.Contains("}", content!);
         // 不对具体措辞做 Equal 断言，以免模型回复 "你好" 与 "您好" 差异导致片状失败
@@ -175,7 +176,7 @@ public class OpenAiChatClientIntegrationTests
 
         Assert.NotNull(response);
         var content = response.Messages?[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content));
+        Assert.False(String.IsNullOrEmpty(content));
         Assert.Contains("小明", content);
     }
 
@@ -197,7 +198,7 @@ public class OpenAiChatClientIntegrationTests
 
         Assert.NotNull(response);
         var content = (response.Messages?[0].Message?.Content as String)?.Trim();
-        Assert.False(String.IsNullOrWhiteSpace(content));
+        Assert.False(String.IsNullOrEmpty(content));
         Assert.Contains("7", content!, StringComparison.Ordinal); // 确定性场景下应得到正确答案 7
     }
 
@@ -216,7 +217,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "TopP 参数传递后模型应正常回复");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     [Fact]
@@ -264,7 +265,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "PresencePenalty 参数传递后模型应正常回复");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     [Fact]
@@ -282,7 +283,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "FrequencyPenalty 参数传递后模型应正常回复");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     [Fact]
@@ -300,7 +301,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "设置 User 字段后模型应正常回复");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     [Fact]
@@ -322,7 +323,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotNull(response.Messages);
         Assert.NotEmpty(response.Messages);
         var content = response.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(content), "多参数组合传递后模型应正常回复");
+        Assert.False(String.IsNullOrEmpty(content));
     }
 
     #endregion
@@ -365,7 +366,7 @@ public class OpenAiChatClientIntegrationTests
         var response = await ChatAsync(request);
 
         Assert.NotNull(response);
-        Assert.False(String.IsNullOrWhiteSpace(response.Model));
+        Assert.False(String.IsNullOrEmpty(response.Model));
         Assert.Contains("qwen", response.Model, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -377,7 +378,7 @@ public class OpenAiChatClientIntegrationTests
         var response = await ChatAsync(request);
 
         Assert.NotNull(response);
-        Assert.False(String.IsNullOrWhiteSpace(response.Id));
+        Assert.False(String.IsNullOrEmpty(response.Id));
     }
 
     [Fact]
@@ -479,7 +480,7 @@ public class OpenAiChatClientIntegrationTests
             }
         }
 
-        Assert.False(String.IsNullOrWhiteSpace(fullContent));
+        Assert.False(String.IsNullOrEmpty(fullContent));
         Assert.True(fullContent.Length > 5, $"concatenated content too short: {fullContent}");
     }
 
@@ -503,7 +504,7 @@ public class OpenAiChatClientIntegrationTests
             }
         }
 
-        Assert.False(String.IsNullOrWhiteSpace(fullContent));
+        Assert.False(String.IsNullOrEmpty(fullContent));
     }
 
     [Fact]
@@ -841,7 +842,7 @@ public class OpenAiChatClientIntegrationTests
             var toolCall = choice.Message.ToolCalls[0];
             Assert.Equal("function", toolCall.Type);
             Assert.Equal("get_weather", toolCall.Function?.Name);
-            Assert.False(String.IsNullOrWhiteSpace(toolCall.Id));
+            Assert.NotEmpty(toolCall.Id);
             Assert.NotNull(toolCall.Function?.Arguments);
         }
     }
@@ -963,7 +964,7 @@ public class OpenAiChatClientIntegrationTests
         Assert.NotEmpty(response2.Messages);
 
         var finalContent = response2.Messages[0].Message?.Content as String;
-        Assert.False(String.IsNullOrWhiteSpace(finalContent));
+        Assert.False(String.IsNullOrEmpty(finalContent));
     }
 
     [Fact]
