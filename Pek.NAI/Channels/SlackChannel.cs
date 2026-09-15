@@ -7,7 +7,7 @@ namespace NewLife.AI.Channels;
 /// <summary>Slack 消息渠道。通过 Incoming Webhook 发送消息到 Slack 频道</summary>
 /// <remarks>
 /// 配置格式（target 字段）：Incoming Webhook URL
-/// 例：https://hooks.slack.com/.../your-webhook-url（示意，占位格式，勿填写真实密钥）
+/// 例：https://hooks.slack.com/services/{TeamId}/{AppId}/{Token}
 ///
 /// Slack Incoming Webhook 文档：https://api.slack.com/messaging/webhooks
 /// </remarks>
@@ -84,7 +84,7 @@ public class SlackChannel : IMessageChannel, ILogFeature
     /// <summary>将 Markdown 转换为 Slack mrkdwn 格式</summary>
     /// <param name="markdown">标准 Markdown 文本</param>
     /// <returns>Slack mrkdwn 格式文本</returns>
-    private static String ConvertToSlackMarkdown(String markdown)
+    internal static String ConvertToSlackMarkdown(String markdown)
     {
         if (markdown.IsNullOrEmpty()) return markdown;
 

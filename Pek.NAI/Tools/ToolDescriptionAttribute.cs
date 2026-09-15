@@ -11,7 +11,7 @@
 /// }
 /// </code>
 /// </remarks>
-[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
 public sealed class ToolDescriptionAttribute : Attribute
 {
     /// <summary>工具名称。覆盖默认的方法名（自动转为 snake_case）</summary>
@@ -37,6 +37,18 @@ public sealed class ToolDescriptionAttribute : Attribute
     /// <summary>触发词。多个词使用中英文逗号分隔，用户消息命中任一词时可自动激活该工具</summary>
     public String? Triggers { get; set; }
 
+    /// <summary>助手输出触发词。多个词使用中英文逗号分隔，AI 上一轮回复命中任一词时可自动激活该工具</summary>
+    public String? AssistantTriggers { get; set; }
+
     /// <summary>是否启用。false 时同步到配置表后将保持禁用状态，可用于临时下线工具</summary>
     public Boolean Enable { get; set; } = true;
+
+    /// <summary>只读工具。true 时表示该工具不改变外部世界状态，可安全重试/并发</summary>
+    public Boolean ReadOnly { get; set; }
+
+    /// <summary>破坏性工具。true 时表示该工具可能产生不可逆副作用（如删除/发送），需审批</summary>
+    public Boolean Destructive { get; set; }
+
+    /// <summary>幂等工具。true 时同参重复调用结果相同，可按同名同参去重</summary>
+    public Boolean Idempotent { get; set; } = true;
 }

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using NewLife.ChatAI.Entity;
 using NewLife;
 using NewLife.Cube;
@@ -12,7 +12,7 @@ using static NewLife.ChatAI.Entity.SuggestedQuestion;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>推荐问题。欢迎页展示的推荐问题，支持缓存响应以加速体验</summary>
-[Menu(180, true, Icon = "fa-table")]
+[Menu(9895, true, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class SuggestedQuestionController : EntityController<SuggestedQuestion>
 {
@@ -20,8 +20,20 @@ public class SuggestedQuestionController : EntityController<SuggestedQuestion>
     {
         //LogOnChange = true;
 
-        //ListFields.RemoveField("Id", "Creator");
+        ListFields.RemoveField("Question");
         ListFields.RemoveCreateField().RemoveRemarkField();
+
+        // 缓存时长友好显示：-1=不缓存，0=当天，正数=N分钟
+        {
+            var lf = ListFields.GetField("CacheDuration") as ListField;
+            if (lf != null)
+                lf.GetValue = e => ((SuggestedQuestion)e).CacheDuration switch
+                {
+                    -1 => "不缓存",
+                    0 => "当天",
+                    var n => $"{n} 分钟",
+                };
+        }
 
         //{
         //    var df = ListFields.GetField("Code") as ListField;
@@ -54,13 +66,11 @@ public class SuggestedQuestionController : EntityController<SuggestedQuestion>
     /// <returns></returns>
     protected override IEnumerable<SuggestedQuestion> Search(Pager p)
     {
-        var sort = p["sort"].ToInt(-1);
         var enable = p["enable"]?.ToBoolean();
-        var modelId = p["modelId"].ToInt(-1);
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return SuggestedQuestion.Search(sort, enable, modelId, start, end, p["Q"], p);
+        return SuggestedQuestion.Search(enable, start, end, p["Q"], p);
     }
 }

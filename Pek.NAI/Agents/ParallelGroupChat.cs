@@ -1,4 +1,5 @@
 ﻿using NewLife.Collections;
+using NewLife.Log;
 
 namespace NewLife.AI.Agents;
 
@@ -28,6 +29,13 @@ public sealed class ParallelGroupChat
 
     /// <summary>单个工作代理的超时时间（秒），默认 60</summary>
     public Int32 WorkerTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>单个工作代理结论的最大字符数（0 表示不限制）。超长时截断并追加省略号，避免主链上下文膨胀</summary>
+    /// <remarks>
+    /// 子代理结论汇聚协议：子代理只向主代理回传约 100 字的摘要。
+    /// 建议设置为 300~500，可将主链上下文大幅压缩。0（默认）表示不截断。
+    /// </remarks>
+    public Int32 MaxWorkerConclusionLength { get; set; } = 0;
 
     #endregion
 
@@ -74,7 +82,7 @@ public sealed class ParallelGroupChat
         }
 
         // 构造聚合输入：初始消息 + 各工作代理的文本结果
-        var aggregatorHistory = BuildAggregatorHistory(initial, workerResults);
+        var aggregatorHistory = BuildAggregatorHistory(initial, workerResults, MaxWorkerConclusionLength);
 
         // 调用聚合代理
         await foreach (var msg in Aggregator.HandleAsync(aggregatorHistory, cancellationToken).ConfigureAwait(false))
@@ -91,11 +99,12 @@ public sealed class ParallelGroupChat
     {
         var results = new List<(IAgent Agent, IList<AgentMessage> Messages)>();
         var semaphore = new SemaphoreSlim(MaxParallelism, MaxParallelism);
-        var history = new List<AgentMessage> { initial };
 
         var tasks = new List<Task<(IAgent Agent, IList<AgentMessage> Messages)>>();
         foreach (var worker in Workers)
         {
+            // A-16：每个 worker 持独立历史副本，防止 DelegatingAgent 等改写 ctx.History 时并发竞态
+            var history = new List<AgentMessage> { initial };
             tasks.Add(ExecuteWorkerAsync(worker, history, semaphore, cancellationToken));
         }
 
@@ -131,11 +140,14 @@ public sealed class ParallelGroupChat
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // 工作代理超时，降级跳过
+            XTrace.WriteLine("[ParallelGroupChat] 工作代理 {0} 超时（{1}s），降级跳过", worker.GetType().Name, WorkerTimeoutSeconds);
             return (worker, new List<AgentMessage>());
         }
-        catch
+        catch (Exception ex)
         {
-            // 工作代理执行失败，降级跳过
+            // 工作代理执行失败，降级跳过但记录原因（A-17：原裸 catch 吞异常，排障无据）
+            XTrace.WriteException(ex);
+            XTrace.WriteLine("[ParallelGroupChat] 工作代理 {0} 执行失败，降级跳过：{1}", worker.GetType().Name, ex.Message);
             return (worker, new List<AgentMessage>());
         }
         finally
@@ -145,8 +157,11 @@ public sealed class ParallelGroupChat
     }
 
     /// <summary>构建聚合代理的消息历史。将各工作代理的文本结果汇总为格式化文本</summary>
+    /// <param name="initial">初始触发消息</param>
+    /// <param name="workerResults">各工作代理的执行结果</param>
+    /// <param name="maxConclusionLength">单个代理结论最大字符数（0 不限制）</param>
     private static IList<AgentMessage> BuildAggregatorHistory(
-        AgentMessage initial, IList<(IAgent Agent, IList<AgentMessage> Messages)> workerResults)
+        AgentMessage initial, IList<(IAgent Agent, IList<AgentMessage> Messages)> workerResults, Int32 maxConclusionLength = 0)
     {
         var history = new List<AgentMessage> { initial };
 
@@ -161,7 +176,13 @@ public sealed class ParallelGroupChat
             foreach (var msg in messages)
             {
                 if (msg is TextMessage textMsg && !String.IsNullOrEmpty(textMsg.Content))
-                    sb.AppendLine(textMsg.Content);
+                {
+                    var content = textMsg.Content;
+                    // 子代理结论汇聚：超长时截断，保持主链上下文精简
+                    if (maxConclusionLength > 0 && content.Length > maxConclusionLength)
+                        content = content.Substring(0, maxConclusionLength) + "...";
+                    sb.AppendLine(content);
+                }
             }
             sb.AppendLine();
         }

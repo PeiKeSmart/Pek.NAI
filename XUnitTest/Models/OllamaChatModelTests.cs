@@ -66,6 +66,113 @@ public class OllamaChatModelTests
     }
 
     [Fact]
+    [DisplayName("FromChatRequest—多轮思考回放thinking字段")]
+    public void FromChatRequest_ThinkingReplay()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        var assistant = new ChatMessage
+        {
+            Role = "assistant",
+            Content = "答案是 42",
+            ReasoningContent = "推理过程",
+        };
+        request.Messages.Add(assistant);
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        Assert.Single(result.Messages);
+        Assert.Equal("推理过程", result.Messages[0].Thinking);
+        Assert.Equal("答案是 42", result.Messages[0].Content?.ToString());
+    }
+
+    [Fact]
+    [DisplayName("FromChatRequest—ImageContent 转换为 images 数组")]
+    public void FromChatRequest_ImageContent_BuildsImages()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        var msg = new ChatMessage { Role = "user" };
+        msg.Contents =
+        [
+            new TextContent("描述图片"),
+            new ImageContent { Data = [1, 2, 3], MediaType = "image/png" },
+        ];
+        request.Messages.Add(msg);
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        var m = result.Messages[0];
+        Assert.NotNull(m.Images);
+        Assert.Single(m.Images!);
+        Assert.Equal(Convert.ToBase64String([1, 2, 3]), m.Images![0]);
+        // 文本部分合并到 Content
+        Assert.Equal("描述图片", m.Content?.ToString());
+    }
+
+    [Fact]
+    [DisplayName("FromChatRequest—data URI 图片解析为 base64")]
+    public void FromChatRequest_DataUri_BuildsImages()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        var msg = new ChatMessage { Role = "user" };
+        msg.Contents = [new ImageContent { Uri = "data:image/png;base64,BBBB" }];
+        request.Messages.Add(msg);
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        Assert.Single(result.Messages[0].Images!);
+        Assert.Equal("BBBB", result.Messages[0].Images![0]);
+    }
+
+    [Fact]
+    [DisplayName("FromChatRequest—ResponseFormat 映射为 format 字段")]
+    public void FromChatRequest_ResponseFormat_MapsToFormat()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        request.Messages.Add(new ChatMessage { Role = "user", Content = "Hi" });
+        request.ResponseFormat = new Dictionary<String, Object> { ["type"] = "json_object" };
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        Assert.Equal("json", result.Format);
+    }
+
+    [Fact]
+    [DisplayName("FromChatRequest—Seed/惩罚参数映射到 options")]
+    public void FromChatRequest_SeedAndPenalty_MapsToOptions()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        request.Messages.Add(new ChatMessage { Role = "user", Content = "Hi" });
+        request.PresencePenalty = 0.5;
+        request.FrequencyPenalty = 0.3;
+        request["Seed"] = 42;
+        request["RepetitionPenalty"] = 1.1;
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        Assert.NotNull(result.Options);
+        Assert.Equal(0.5, result.Options!.PresencePenalty);
+        Assert.Equal(0.3, result.Options.FrequencyPenalty);
+        Assert.Equal(42, result.Options.Seed);
+        Assert.Equal(1.1, result.Options.RepeatPenalty);
+    }
+
+    [Fact]
+    [DisplayName("FromChatRequest—NumCtx/KeepAlive 透传")]
+    public void FromChatRequest_NumCtxAndKeepAlive_Passthrough()
+    {
+        var request = new ChatRequest { Model = "qwen3:8b" };
+        request.Messages.Add(new ChatMessage { Role = "user", Content = "Hi" });
+        request["NumCtx"] = 16384;
+        request["KeepAlive"] = 3600L;
+
+        var result = OllamaChatRequest.FromChatRequest(request);
+
+        Assert.NotNull(result.Options);
+        Assert.Equal(16384, result.Options!.NumCtx);
+        Assert.Equal(3600L, result.KeepAlive);
+    }
+
+    [Fact]
     [DisplayName("FromChatRequest—无 Options 参数时不创建 Options")]
     public void FromChatRequest_NoOptions()
     {
@@ -271,6 +378,12 @@ public class OllamaChatModelTests
         Assert.Single(result.Message.ToolCalls!);
         Assert.Equal("get_weather", result.Message.ToolCalls![0].Function?.Name);
         Assert.NotNull(result.Message.ToolCalls[0].Function?.Arguments);
+
+        // 通过 IChatResponse 接口验证：含 tool_calls 时 FinishReason 应为 ToolCalls
+        IChatResponse resp = result;
+        Assert.NotNull(resp.Messages);
+        Assert.NotEmpty(resp.Messages!);
+        Assert.Equal(FinishReason.ToolCalls, resp.Messages![0].FinishReason);
     }
 
     [Fact]
@@ -306,7 +419,7 @@ public class OllamaChatModelTests
             EnableThinking = false,
         });
 
-        // 使用 OllamaChatClient.JsonOptions（SnakeCaseLower + IgnoreNullValues=false）序列化，与 PostAsync 保持一致
+        // 使用 OllamaChatClient.JsonOptions（SnakeCaseLower + IgnoreNullValues=true）序列化，与 PostAsync 保持一致
         using var client = new OllamaChatClient("", "qwen3.5:0.8b");
         var json = client.JsonHost.Write(req, client.JsonOptions!)!;
         // Ollama 要求 stream/model/messages 等为小写 snake_case
@@ -436,6 +549,8 @@ public class OllamaChatModelTests
         // Ollama 响应中无 id/type，应使用默认值
         Assert.Equal("", msg.ToolCalls[0].Id);
         Assert.Equal("function", msg.ToolCalls[0].Type);
+        // done_reason=stop 但含 tool_calls → FinishReason 应为 ToolCalls（与 IChatResponse.Messages getter 一致）
+        Assert.Equal(FinishReason.ToolCalls, result.Messages![0].FinishReason);
     }
 
     [Fact]
@@ -501,6 +616,36 @@ public class OllamaChatModelTests
         Assert.NotNull(result.Usage);
         Assert.Equal(20, result.Usage!.InputTokens);
         Assert.Equal(100, result.Usage.OutputTokens);
+    }
+
+    [Fact]
+    [DisplayName("ToStreamChunk—done=true 含 tool_calls 时 FinishReason 为 ToolCalls")]
+    public void ToStreamChunk_ToolCalls_FinishReasonToolCalls()
+    {
+        var resp = new OllamaChatResponse
+        {
+            Model = "qwen3:8b",
+            Message = new OllamaChatMessage
+            {
+                Role = "assistant",
+                Content = "",
+                ToolCalls =
+                [
+                    new OllamaToolCall
+                    {
+                        Function = new OllamaFunctionCall { Name = "get_weather", Arguments = new Dictionary<String, Object> { ["city"] = "Beijing" } },
+                    }
+                ],
+            },
+            Done = true,
+            DoneReason = "stop",
+        };
+
+        var result = resp.ToStreamChunk();
+
+        Assert.NotNull(result);
+        // done_reason=stop 但含 tool_calls → ToolCalls（与 IChatResponse.Messages getter 一致）
+        Assert.Equal(FinishReason.ToolCalls, result!.Messages![0].FinishReason);
     }
 
     [Fact]

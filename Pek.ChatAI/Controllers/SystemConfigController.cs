@@ -17,10 +17,11 @@ public class SystemConfigController(ChatSetting chatSetting) : ChatApiController
     public ActionResult<SystemConfigDto> GetConfig()
     {
 
-        // 从推荐问题表读取启用的问题，按排序号倒序、编号倒序排列
-        var questions = SuggestedQuestion.FindAllCachedEnabled()
-            .OrderByDescending(q => q.Sort)
+        // 从推荐问题表读取启用的问题，先按更新时间降序取前50条，再按热度分数降序取最多12条
+        var questions = SuggestedQuestion.FindTopEnabledByUpdateTime()
+            .OrderByDescending(q => q.HeatScore)
             .ThenByDescending(q => q.Id)
+            .Take(12)
             .Select(q => new SuggestedQuestionDto
             {
                 Title = q.Title,
@@ -36,6 +37,13 @@ public class SystemConfigController(ChatSetting chatSetting) : ChatApiController
             SiteTitle = chatSetting.SiteTitle,
             LogoUrl = chatSetting.LogoUrl,
             WelcomeMessage = chatSetting.WelcomeMessage.IsNullOrEmpty() ? null : chatSetting.WelcomeMessage,
+            WelcomeSubtitle = chatSetting.WelcomeSubtitle.IsNullOrEmpty() ? null : chatSetting.WelcomeSubtitle,
+            SupportText = chatSetting.SupportText.IsNullOrEmpty() ? null : chatSetting.SupportText,
+            SupportUrl = chatSetting.SupportUrl.IsNullOrEmpty() ? null : chatSetting.SupportUrl,
+            SupportPosition = chatSetting.SupportPosition,
+            ErrorGuidance = chatSetting.ErrorGuidance.IsNullOrEmpty() ? null : chatSetting.ErrorGuidance,
+            ShareExpireMinutes = chatSetting.ShareExpireMinutes,
+            AllowAnonymousShare = chatSetting.AllowAnonymousShare,
             SuggestedQuestions = questions,
         });
     }

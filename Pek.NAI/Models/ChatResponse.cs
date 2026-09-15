@@ -39,6 +39,8 @@ public class ChatResponse : IChatResponse
             var value = Messages?.FirstOrDefault()?.Message?.Content ?? Messages?.FirstOrDefault()?.Delta?.Content;
             if (value == null) return null;
             if (value is IList<Object> list) value = list.FirstOrDefault();
+            // 空 content 数组（tool_calls/content_filter 结束、思考-only 回合）返回空字符串，避免 ToString 空引用
+            if (value == null) return String.Empty;
             if (value is String str) return str;
             if (value is IDictionary<String, Object?> dic)
             {
@@ -102,6 +104,46 @@ public class ChatResponse : IChatResponse
         };
         if (content != null || !reasoning.IsNullOrEmpty())
             choice.Delta = new ChatMessage { Content = content, ReasoningContent = reasoning, };
+
+        msgs.Add(choice);
+
+        return choice;
+    }
+
+    /// <summary>添加工具调用增量块。用于透传模式下将 tool_call delta 转换为 OpenAI 兼容的流式块</summary>
+    /// <param name="toolCallId">工具调用编号</param>
+    /// <param name="toolName">工具名称</param>
+    /// <param name="arguments">当前已累积的参数字符串</param>
+    /// <param name="finishReason">结束原因</param>
+    /// <returns>新添加的项</returns>
+    public ChatChoice AddToolCallDelta(String toolCallId, String toolName, String? arguments = null, FinishReason? finishReason = null)
+    {
+        var msgs = Messages ??= [];
+
+        // Index 使用 msgs.Count 与 Add/AddDelta 一致（A-57：原硬编码 0，多工具流式块产生多个 Index=0 的 choice）
+        var choice = new ChatChoice
+        {
+            Index = msgs.Count,
+            FinishReason = finishReason
+        };
+        choice.Delta = new ChatMessage
+        {
+            Role = "assistant",
+            ToolCalls =
+            [
+                new ToolCall
+                {
+                    Index = 0,
+                    Id = toolCallId,
+                    Type = "function",
+                    Function = new FunctionCall
+                    {
+                        Name = toolName,
+                        Arguments = arguments,
+                    },
+                }
+            ]
+        };
 
         msgs.Add(choice);
 
@@ -217,4 +259,5 @@ public class UsageDetails
 /// <param name="ToolCallId">工具调用编号</param>
 /// <param name="Name">工具名称</param>
 /// <param name="Value">事件值。start 时为 Arguments，done 时为 Result，error 时为错误信息</param>
-public record ToolCallEventInfo(String Type, String ToolCallId, String Name, String? Value);
+/// <param name="LlmResult">LLM 摘要。done 事件专用，role=tool 历史回放时优先使用；null 时回退到 Value</param>
+public record ToolCallEventInfo(String Type, String ToolCallId, String Name, String? Value, String? LlmResult = null);

@@ -1,9 +1,9 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
-using NewLife.AI.Filters;
 using NewLife.AI.Tools;
 using NewLife.ChatAI.Filters;
 using NewLife.ChatAI.Handlers;
@@ -32,20 +32,42 @@ public static class ChatAIExtensions
     /// <returns></returns>
     public static IServiceCollection AddChatAI(this IServiceCollection services)
     {
+        // SPA 静态资源缓存策略（同时作用于 UseStaticFiles 与 MapFallbackToFile）：
+        // - chat.html（无 hash 入口）no-cache：可缓存但每次条件验证（配合 ETag 返回 304），发布后立即生效
+        // - /assets/**（带 hash）immutable 一年强缓存：内容变更时文件名 hash 变化自然失效，零重复下载
+        services.Configure<StaticFileOptions>(options =>
+        {
+            options.OnPrepareResponse = ctx =>
+            {
+                var path = ctx.Context.Request.Path.Value;
+                if (path.IsNullOrEmpty()) return;
+                if (path.EndsWith("chat.html", StringComparison.OrdinalIgnoreCase))
+                    ctx.Context.Response.Headers["Cache-Control"] = "no-cache";
+                else if (path.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
+                    ctx.Context.Response.Headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            };
+        });
+
         services.AddScoped<ChatApplicationService>();
-        services.AddScoped<IMessageFlow, MessageService>();
+        services.AddScoped<IMessageFlow, MessageFlowForWeb>();
         services.AddSingleton<IChatSetting>(_ => ChatSetting.Current);
         services.AddSingleton(_ => ChatSetting.Current);
         services.AddSingleton<SkillService>();
         services.AddSingleton<UsageService>();
         services.AddSingleton<ModelService>();
         services.AddSingleton<GatewayService>();
-        services.AddSingleton<GatewayMessageFlow>();
+        services.AddSingleton<MessageFlowForGateway>();
+
+        // 数据库查询工具
+        services.AddSingleton<DbSchemaService>();
+        services.AddSingleton<DbQueryToolService>();
 
         // IChatHandler 三段式调用链（OnBefore 正序、核心 LLM 在 MessageFlow.InvokeLlmAsync、OnAfter 正序）
         // OnBefore 与 OnAfter 均按注册顺序正序执行，顺序意义：见 Doc/L2-IChatHandler架构.md
-        services.AddSingleton<IChatHandler, SuggestedCacheHandler>();   // 1. OnBefore 命中缓存时 Interceptor 短路 LLM
+        // 不再注册 ContextRoundsHandler：已移除会话轮数硬限制（对齐竞品，轮数不是资源，Token 才是，由滑动窗口 + TokenBudgetFilter 兜底）
+        services.AddSingleton<IChatHandler, SuggestedCacheHandler>();   // 0. OnBefore 命中缓存时 Interceptor 短路 LLM
         services.AddSingleton<IChatHandler, SkillActivationHandler>();  // 2. OnBefore 技能解析与注入 / OnAfter 技能计数
+        services.AddSingleton<IChatHandler, ToolContextHandler>();      // 2.5 OnBefore 工具仓位填充与选择 / 超仓工具目录注入
         services.AddSingleton<IChatHandler, TitleGenerationHandler>();  // 3. OnBefore 异步生成标题（与 LLM 并行）
         services.AddSingleton<IChatHandler, LearningHandler>();         // 4. OnBefore 注入记忆 / OnAfter 自学习分析（火焰即忘）
         services.AddSingleton<IChatHandler, UsageRecordHandler>();      // 5. OnAfter 用量入库
@@ -54,12 +76,6 @@ public static class ChatAIExtensions
         // Web UI 主调用链：收集全部已注册的 IChatHandler，按 [ChatHandlerOrder] 特性构建有序视图
         // TryAdd 语义：上层项目已注册时不重复注册
         services.TryAddSingleton(sp => new ChatHandlerChain(sp.GetServices<IChatHandler>()));
-
-        // 网关专属调用链：仅含用量记录（无 UI 专属的技能/知识库/持久化处理器）
-        // 复用主链路中已实例化的同一批 Handler 单例，无重复创建
-        services.TryAddSingleton<GatewayChatHandlerChain>(sp =>
-            new GatewayChatHandlerChain(sp.GetServices<IChatHandler>()
-                .Where(h => h is UsageRecordHandler)));
 
         // 工具服务注册（工具提供者实现）
         RegisterToolServices(services);
@@ -71,6 +87,18 @@ public static class ChatAIExtensions
             registry.AddTools<BuiltinToolService>();
             registry.AddTools<NetworkToolService>();
             registry.AddTools<CurrentUserTool>();
+            registry.AddTools<WidgetToolService>();
+            registry.AddTools<ChartToolService>();
+            registry.AddTools<MapAnnotationToolService>();
+            registry.AddTools<TimelineToolService>();
+            registry.AddTools<MindmapToolService>();
+            registry.AddTools<KanbanToolService>();
+            registry.AddTools<DbQueryToolService>();
+            // 工具名别名：模型按旧习惯调用 query_sql 时路由到 run_sql（仅服务端 fallback，不进 LLM Schema）
+            registry.AddToolAlias("query_sql", "run_sql");
+            registry.AddTools<BuildPptToolService>();
+            registry.AddTools<BuildExcelToolService>();
+            registry.AddTools<BuildDocToolService>();
         });
 
         services.TryAddSingleton(sp =>
@@ -143,8 +171,8 @@ public static class ChatAIExtensions
         {
             // 嵌入资源优先，再到主机的 WebRootFileProvider，覆盖 Cube 内嵌视图文件夹
             env.WebRootFileProvider = new CompositeFileProvider(
-                embeddedProvider,
-                env.WebRootFileProvider);
+                env.WebRootFileProvider,
+                embeddedProvider);
         }
         else
         {
@@ -175,13 +203,11 @@ public static class ChatAIExtensions
     /// <param name="services">服务集合</param>
     private static void RegisterToolServices(IServiceCollection services)
     {
-        const String url = "https://ai.newlifex.com";
-
         // 从 NativeTool 表读取配置，首次启动表为空时使用硬编码默认值
         var toolMap = LoadToolConfigFromDb();
 
         var ipTool = toolMap.GetValueOrDefault("get_ip_location");
-        var ipProviders = ipTool?.Providers ?? "pconline,ipapi";
+        var ipProviders = ipTool?.Providers ?? "pconline";
 
         var weatherTool = toolMap.GetValueOrDefault("get_weather");
         var weatherProviders = weatherTool?.Providers ?? "nmc,wttr";
@@ -190,13 +216,11 @@ public static class ChatAIExtensions
         var translateProviders = translateTool?.Providers ?? "mymemory";
 
         var searchTool = toolMap.GetValueOrDefault("web_search");
-        var searchProviders = searchTool?.Providers ?? "bing,duckduckgo";
+        var searchProviders = searchTool?.Providers ?? "bing_rss,duckduckgo";
         var searchKey = searchTool?.ApiKey ?? "";
-        var searchRemoteUrl = searchTool?.Endpoint ?? url;
 
         var fetchTool = toolMap.GetValueOrDefault("web_fetch");
         var fetchProviders = fetchTool?.Providers ?? "direct";
-        var fetchRemoteUrl = fetchTool?.Endpoint ?? url;
 
         // IP 归属地
         foreach (var name in SplitProviders(ipProviders))
@@ -204,10 +228,6 @@ public static class ChatAIExtensions
             switch (name)
             {
                 case "pconline": services.AddSingleton<IIpLocationService, IpLocationPconlineService>(); break;
-                case "ipapi": services.AddSingleton<IIpLocationService, IpLocationIpApiService>(); break;
-                case "newlife":
-                    var ipRemote = ipTool?.Endpoint ?? url;
-                    services.AddSingleton<IIpLocationService>(sp => new IpLocationRemoteService(ipRemote)); break;
             }
         }
 
@@ -218,9 +238,6 @@ public static class ChatAIExtensions
             {
                 case "nmc": services.AddSingleton<IWeatherService, WeatherNmcService>(); break;
                 case "wttr": services.AddSingleton<IWeatherService, WeatherWttrService>(); break;
-                case "newlife":
-                    var weatherRemote = weatherTool?.Endpoint ?? url;
-                    services.AddSingleton<IWeatherService>(sp => new WeatherRemoteService(weatherRemote)); break;
             }
         }
 
@@ -230,9 +247,6 @@ public static class ChatAIExtensions
             switch (name)
             {
                 case "mymemory": services.AddSingleton<ITranslateService, TranslateMyMemoryService>(); break;
-                case "newlife":
-                    var translateRemote = translateTool?.Endpoint ?? url;
-                    services.AddSingleton<ITranslateService>(sp => new TranslateRemoteService(translateRemote)); break;
             }
         }
 
@@ -242,9 +256,10 @@ public static class ChatAIExtensions
             switch (name)
             {
                 case "bing": services.AddSingleton<ISearchService>(sp => new SearchBingService(searchKey)); break;
+                case "bing_rss": services.AddSingleton<ISearchService, SearchBingRssService>(); break;
                 case "serper": services.AddSingleton<ISearchService>(sp => new SearchSerperService(searchKey)); break;
                 case "duckduckgo": services.AddSingleton<ISearchService, SearchDuckDuckGoService>(); break;
-                case "newlife": services.AddSingleton<ISearchService>(sp => new SearchRemoteService(searchRemoteUrl)); break;
+                case "sogou": services.AddSingleton<ISearchService, SearchSogouService>(); break;
             }
         }
 
@@ -254,7 +269,6 @@ public static class ChatAIExtensions
             switch (name)
             {
                 case "direct": services.AddSingleton<IWebFetchService, WebFetchDirectService>(); break;
-                case "newlife": services.AddSingleton<IWebFetchService>(sp => new WebFetchRemoteService(fetchRemoteUrl)); break;
             }
         }
     }

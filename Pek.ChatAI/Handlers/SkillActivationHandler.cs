@@ -1,28 +1,27 @@
-﻿using NewLife.AI.Tools;
-using NewLife.ChatAI.Tools;
+﻿using NewLife.Collections;
 using NewLife.Log;
 
 namespace NewLife.ChatAI.Handlers;
 
-/// <summary>技能激活处理器。事前解析消息中的技能引用与 @ 工具引用，事后记录技能使用次数</summary>
+/// <summary>技能激活处理器。事前解析消息中的技能引用，注入技能 Prompt 到 system 消息；事后记录技能使用次数</summary>
 /// <remarks>
 /// <para>事前：从 <c>flow["NewSkillCode"]</c>（请求显式指定）或 <c>flow.SkillId</c>（会话已绑定）解析当前激活技能，
-/// 注入技能 Prompt 到 system 消息，匹配 NativeTool/MCP 触发词填充 <see cref="IChatContext.SelectedTools"/>。</para>
+/// 将技能 Prompt 加入 <see cref="IChatContext.SystemSegments"/> 待写入 system 消息，并列出技能目录。
+/// 触发词命中选择工具由 <c>ToolContextHandler</c>（StarChat）处理并填充 <see cref="IChatContext.SelectedTools"/>。</para>
 /// <para>事后：当 <c>SkillId &gt; 0</c> 且未短路时调用 <see cref="SkillService.RecordUsage"/> 累加技能使用计数。</para>
 /// </remarks>
-/// <param name="toolProviders">工具提供者集合（用于 MCP 触发词匹配）</param>
 /// <param name="skillService">技能服务（可为 null）</param>
 [ChatHandlerOrder(20)]
-public class SkillActivationHandler(IEnumerable<IToolProvider> toolProviders, SkillService? skillService) : IChatHandler
+public class SkillActivationHandler(SkillService? skillService) : ChatHandlerBase
 {
-    /// <inheritdoc/>
-    public virtual ChatHandlerCapabilities Capabilities => ChatHandlerCapabilities.Before | ChatHandlerCapabilities.After;
+    ///// <inheritdoc/>
+    //public override ChatHandlerCapabilities Capabilities => ChatHandlerCapabilities.Before | ChatHandlerCapabilities.After;
 
     /// <summary>派生类访问 <see cref="SkillService"/> 实例</summary>
     protected SkillService? SkillServiceInstance => skillService;
 
     /// <inheritdoc/>
-    public Task OnBefore(IChatContext context, CancellationToken cancellationToken)
+    public override Task OnBefore(IChatContext context, CancellationToken cancellationToken)
     {
         if (skillService == null) return Task.CompletedTask;
         //using var span = tracer?.NewSpan("handler:SkillActivation");
@@ -33,7 +32,7 @@ public class SkillActivationHandler(IEnumerable<IToolProvider> toolProviders, Sk
             var conversation = flow.Conversation;
             if (skillCode.EqualIgnoreCase("none"))
             {
-                if (conversation.SkillId != 0)
+                if (conversation.Id > 0 && conversation.SkillId != 0)
                 {
                     conversation.SkillId = 0;
                     conversation.SkillName = null;
@@ -46,71 +45,94 @@ public class SkillActivationHandler(IEnumerable<IToolProvider> toolProviders, Sk
                 var skill = Skill.FindByCode(skillCode);
                 if (skill != null && skill.Enable)
                 {
-                    if (conversation.SkillId != skill.Id)
+                    if (conversation.Id > 0 && conversation.SkillId != skill.Id)
                     {
                         conversation.SkillId = skill.Id;
                         conversation.SkillName = skill.Name;
                         conversation.Update();
                     }
                     flow.SkillId = skill.Id;
+                    flow.ActivatedSkills.Add(skill);
                 }
             }
         }
 
-        var lastUserContent = context.ContextMessages.LastOrDefault(m => m.Role == "user")?.Content as String;
+        // 优先从 UserMessage 取内容（不经 ApplyCacheControl 清零），Regenerate 场景 UserMessage 为 null 时回退到 ContextMessages
+        var lastUserContent = context.UserMessage?.Content
+            ?? context.ContextMessages?.LastOrDefault(m => m.Role == "user")?.Content as String;
 
-        // 派生类钩子：商用版可基于内容自动匹配技能
+        // 基于用户消息内容自动匹配技能（StarChat 与 ChatAI 均支持）
         ResolveSkillByContent(context, lastUserContent);
 
-        // 触发词命中（NativeTool）
-        var matchedNative = skillService.MatchNativeToolNamesByContent(lastUserContent);
-        foreach (var n in matchedNative)
-            context.SelectedTools.Add(n);
-
-        // 触发词命中（MCP）
-        foreach (var mcp in toolProviders.OfType<McpClientService>())
+        // 续轮粘滞：会话已有绑定技能且上述路径未覆盖时，加入 ActivatedSkills
+        if (context.SkillId > 0 && context is MessageFlowContext flow2)
         {
-            var matchedMcp = mcp.MatchToolNamesByContent(lastUserContent);
-            foreach (var n in matchedMcp)
-                context.SelectedTools.Add(n);
+            var stickySkill = Skill.FindById(context.SkillId);
+            if (stickySkill != null && stickySkill.Enable && !stickySkill.IsSystem)
+            {
+                // 避免重复添加（RequestSkillCode 或触发词可能已命中同一技能）
+                if (!flow2.ActivatedSkills.Any(s => s.Id == stickySkill.Id))
+                    flow2.ActivatedSkills.Add(stickySkill);
+            }
         }
 
-        // 注入技能 Prompt
+        // 默认技能兜底：上述全部路径（RequestSkillCode / 触发词 / 续轮粘滞）均未激活技能时，
+        // 读取 UserSetting.DefaultSkill 作为用户首选技能
+        if (context.SkillId <= 0 && context.UserId > 0 && context is MessageFlowContext flow3)
+        {
+            var userSetting = UserSetting.FindByUserId(context.UserId);
+            var defaultSkillCode = userSetting?.DefaultSkill;
+            if (!defaultSkillCode.IsNullOrEmpty())
+            {
+                var defaultSkill = Skill.FindByCode(defaultSkillCode);
+                if (defaultSkill != null && defaultSkill.Enable)
+                {
+                    var conversation = flow3.Conversation;
+                    if (conversation.Id > 0 && conversation.SkillId != defaultSkill.Id)
+                    {
+                        conversation.SkillId = defaultSkill.Id;
+                        conversation.SkillName = defaultSkill.Name;
+                        conversation.Update();
+                    }
+                    flow3.SkillId = defaultSkill.Id;
+                    flow3.ActivatedSkills.Add(defaultSkill);
+                }
+            }
+        }
+
+        // 注入技能 Prompt（已选中工具由 ToolContextHandler 在上游填充）
         var skillNames = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
         var skillPrompt = skillService.BuildSkillPrompt(context.SkillId, lastUserContent, context.SelectedTools, skillNames);
-        if (skillPrompt.IsNullOrWhiteSpace()) return Task.CompletedTask;
-
-        var systemMsg = context.ContextMessages.FirstOrDefault(m => m.Role == "system");
-        if (systemMsg != null)
+        if (!skillPrompt.IsNullOrWhiteSpace())
         {
-            var existing = systemMsg.Content as String ?? String.Empty;
-            systemMsg.Content = skillPrompt.Trim() + (existing.Length > 0 ? "\n\n" + existing : String.Empty);
-        }
-        else
-        {
-            context.ContextMessages.Insert(0, new AiChatMessage { Role = "system", Content = skillPrompt.Trim() });
+            context.SystemSegments.Add(skillPrompt.Trim());
+
+            // 用户消息追加技能名称与可用工具
+            if (context.UserMessage is DbChatMessage userMessage)
+            {
+                // 技能名可能是编码或者中文名，而列表里面基本都是 "code/name" 格式。
+                var skillName = context.Conversation.SkillName;
+                if (!skillName.IsNullOrEmpty() && !skillNames.Any(e => e == skillName || e.StartsWith(skillName + "/") || e.EndsWith("/" + skillName)))
+                    skillNames.Add(skillName);
+
+                if (skillNames.Count > 0)
+                    userMessage.SkillNames = String.Join(",", skillNames);
+                userMessage.Update();
+
+                DefaultSpan.Current?.AppendTag(userMessage.SkillNames!);
+            }
         }
 
-        // 用户消息追加技能名称与可用工具
-        if (context.UserMessage is DbChatMessage userMessage)
-        {
-            // 技能名可能是编码或者中文名，而列表里面基本都是 “code/name” 格式。
-            var skillName = context.Conversation.SkillName;
-            if (!skillName.IsNullOrEmpty() && !skillNames.Any(e => e == skillName || e.StartsWith(skillName + "/") || e.EndsWith("/" + skillName)))
-                skillNames.Add(skillName);
-
-            if (skillNames.Count > 0)
-                userMessage.SkillNames = String.Join(",", skillNames);
-            userMessage.Update();
-
-            DefaultSpan.Current?.AppendTag(userMessage.SkillNames!);
-        }
+        // 技能目录：将所有技能以 code/name + 描述形式注入，供模型参考
+        var catalog = BuildSkillCatalog(skillService);
+        if (!catalog.IsNullOrWhiteSpace())
+            context.SystemSegments.Add(catalog);
 
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public Task OnAfter(IChatContext context, CancellationToken cancellationToken)
+    public override Task OnAfter(IChatContext context, CancellationToken cancellationToken)
     {
         if (skillService == null || context.SkillId <= 0 || context.UserId <= 0) return Task.CompletedTask;
         if (context.HasError) return Task.CompletedTask;
@@ -120,8 +142,78 @@ public class SkillActivationHandler(IEnumerable<IToolProvider> toolProviders, Sk
         return Task.CompletedTask;
     }
 
-    /// <summary>派生类钩子：基于用户消息内容自动匹配技能。基类无操作</summary>
+    /// <summary>基于用户消息内容自动匹配技能。所有命中技能加入 ActivatedSkills，取 Sort 最高者为当前 SkillId（不覆盖已有显式选择）。
+    /// 仅匹配非系统技能（IsSystem=false），系统技能无条件注入 prompt 不参与门控</summary>
     /// <param name="context">对话上下文</param>
     /// <param name="lastUserContent">最后一条用户消息文本</param>
-    protected virtual void ResolveSkillByContent(IChatContext context, String? lastUserContent) { }
+    protected virtual void ResolveSkillByContent(IChatContext context, String? lastUserContent)
+    {
+        if (skillService == null) return;
+
+        // 网关/渠道项目接入按项目过滤技能；Web 场景 context["ProjectId"] 为空保持全量行为
+        var matches = skillService.MatchSkillsByContent(lastUserContent, projectId: ResolveProjectId(context));
+        if (matches.Count == 0) return;
+
+        // 全部命中技能加入 ActivatedSkills，供 IntentGateHandler 做模式判断
+        if (context is MessageFlowContext flow)
+        {
+            foreach (var skill in matches)
+            {
+                if (!skill.IsSystem && !flow.ActivatedSkills.Any(s => s.Id == skill.Id))
+                    flow.ActivatedSkills.Add(skill);
+            }
+        }
+
+        // 若尚无显式激活的技能（RequestSkillCode 未设置），取 Sort 最高者作为当前技能并持久化
+        if (context.SkillId > 0) return;
+
+        var best = matches[0];
+        context.SkillId = best.Id;
+
+        if (context is MessageFlowContext flow2)
+        {
+            var conversation = flow2.Conversation;
+            if (conversation.Id > 0 && conversation.SkillId != best.Id)
+            {
+                conversation.SkillId = best.Id;
+                conversation.SkillName = best.Name;
+                conversation.Update();
+            }
+        }
+    }
+
+    /// <summary>解析当前请求的项目编号。优先使用会话实体 ProjectId（StarChat 独有），缺失时回退读取上下文扩展字段（网关/渠道注入）</summary>
+    /// <param name="context">对话上下文</param>
+    /// <returns>项目编号，0 表示个人/未指定</returns>
+    private static Int32 ResolveProjectId(IChatContext context)
+    {
+#if STARCHAT
+        if (context.Conversation is Conversation conversation && conversation.ProjectId > 0)
+            return conversation.ProjectId;
+#endif
+        return context["ProjectId"].ToInt();
+    }
+
+    /// <summary>构建技能目录。列出所有启用技能的编码、名称和描述</summary>
+    /// <param name="svc">技能服务</param>
+    /// <returns>技能目录文本；无可列技能时返回空字符串</returns>
+    protected virtual String BuildSkillCatalog(SkillService svc)
+    {
+        // 系统技能（IsSystem=true）已由 BuildSkillPrompt 无条件注入全文，目录只列可激活技能，避免重复广告
+        var allSkills = svc.GetAllSkills().Where(e => !e.IsSystem).ToList();
+        if (allSkills.Count == 0) return String.Empty;
+
+        var sb = Pool.StringBuilder.Get();
+        sb.AppendLine("## 可用技能目录");
+        sb.AppendLine("以下技能可通过 @技能编码 或在会话设置中激活：");
+        foreach (var skill in allSkills)
+        {
+            var entry = skill.Code.IsNullOrEmpty() ? skill.Name : $"{skill.Code}/{skill.Name}";
+            var desc = skill.Description;
+            if (desc.IsNullOrEmpty()) desc = "无描述";
+            if (desc.Length > 60) desc = desc.Substring(0, 60) + "...";
+            sb.AppendLine($"- {entry}：{desc}");
+        }
+        return sb.Return(true);
+    }
 }

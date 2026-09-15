@@ -1,17 +1,20 @@
-import { useEffect, useCallback, useState, useRef } from 'react'
+import { useEffect, useCallback, useState, useRef, Suspense } from 'react'
+import { lazyLoad } from '@/utils/lazyLoad'
 import { useNavigate, useParams, Routes, Route, Navigate } from 'react-router-dom'
 import { ChatLayout } from '@/layouts/ChatLayout'
 import { WelcomePage } from '@/pages/WelcomePage'
 import { ChatPage } from '@/pages/ChatPage'
-import { SharePage } from '@/pages/SharePage'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { PresetSelector } from '@/components/chat/PresetSelector'
-import { SettingsModal } from '@/components/settings/SettingsModal'
-import { SystemSettingsModal } from '@/components/settings/SystemSettingsModal'
 import { useChatStore, useSettingsStore, useUIStore } from '@/stores'
+
+const SharePage = lazyLoad(() => import('@/pages/SharePage').then(m => ({ default: m.SharePage })))
+const SettingsModal = lazyLoad(() => import('@/components/settings/SettingsModal').then(m => ({ default: m.SettingsModal })))
+const SystemSettingsModal = lazyLoad(() => import('@/components/settings/SystemSettingsModal').then(m => ({ default: m.SystemSettingsModal })))
 import { fetchUserProfile, fetchSystemConfig, type SuggestedQuestion } from '@/lib/api'
 import { AppSkeleton } from '@/components/common/AppSkeleton'
 import { ToastContainer } from '@/components/common/Toast'
+import { applyBrandTheme } from '@/lib/theme'
 
 function ChatApp() {
   const { conversationId } = useParams<{ conversationId: string }>()
@@ -57,6 +60,10 @@ function ChatApp() {
   const [siteTitle, setSiteTitle] = useState('智能助手')
   const [suggestedQuestions, setSuggestedQuestions] = useState<SuggestedQuestion[]>([])
   const [welcomeMessage, setWelcomeMessage] = useState<string | undefined>(undefined)
+  const [welcomeSubtitle, setWelcomeSubtitle] = useState<string | undefined>(undefined)
+  const [supportText, setSupportText] = useState<string | undefined>(undefined)
+  const [supportUrl, setSupportUrl] = useState<string | undefined>(undefined)
+  const [supportPosition, setSupportPosition] = useState<number>(0)
   const [draftInput, setDraftInput] = useState('')
 
   // URL 参数直发：解析跳转参数（仅在组件挂载时初始化一次）
@@ -112,6 +119,11 @@ function ChatApp() {
           document.title = cfg.siteTitle
           setSuggestedQuestions(cfg.suggestedQuestions)
           if (cfg.welcomeMessage) setWelcomeMessage(cfg.welcomeMessage)
+          if (cfg.welcomeSubtitle) setWelcomeSubtitle(cfg.welcomeSubtitle)
+          if (cfg.supportText) setSupportText(cfg.supportText)
+          if (cfg.supportUrl) setSupportUrl(cfg.supportUrl)
+          if (cfg.supportPosition != null) setSupportPosition(cfg.supportPosition)
+          applyBrandTheme(cfg.themeColor, cfg.brandGradient)
         })
         .catch(() => {}),
     ]).finally(() => setAppReady(true))
@@ -172,6 +184,11 @@ function ChatApp() {
   const resolvedModel = activeConv?.modelId ?? settings.defaultModel ?? 0
   const currentModel = resolvedModel || models[0]?.id || 0
   const supportsThinking = models.find((m) => m.id === currentModel)?.supportThinking ?? false
+
+  // 当前会话标题变化时更新网页标题，离开对话时恢复站点名
+  useEffect(() => {
+    document.title = activeConv?.title ? `${activeConv.title} - ${siteTitle}` : siteTitle
+  }, [activeConversationId, activeConv?.title, siteTitle])
 
   // 当前模型不支持思考时，若已选了 think 模式则自动回退到 auto
   useEffect(() => {
@@ -251,6 +268,9 @@ function ChatApp() {
         conversationTitle={activeConv?.title}
         userName={userName}
         userAvatar={userAvatar}
+        supportText={supportText}
+        supportUrl={supportUrl}
+        supportPosition={supportPosition}
         modelSelector={
           <div className="flex items-center gap-2">
           <ModelSelector
@@ -292,6 +312,7 @@ function ChatApp() {
             onSend={sendMessage}
             siteTitle={siteTitle}
             welcomeMessage={welcomeMessage}
+            welcomeSubtitle={welcomeSubtitle}
             suggestedQuestions={suggestedQuestions}
             attachments={pendingAttachments}
             onAttachmentAdd={addAttachment}
@@ -327,21 +348,29 @@ function ChatApp() {
         )}
       </ChatLayout>
 
-      <SettingsModal
-        open={settingsOpen}
-        onClose={closeSettings}
-        settings={settings}
-        onSettingsChange={settings.update}
-        models={models}
-        onDataCleared={() => {
-          loadConversations()
-          handleNewChat()
-        }}
-      />
-      <SystemSettingsModal
-        open={systemSettingsOpen}
-        onClose={() => setSystemSettingsOpen(false)}
-      />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            open={settingsOpen}
+            onClose={closeSettings}
+            settings={settings}
+            onSettingsChange={settings.update}
+            models={models}
+            onDataCleared={() => {
+              loadConversations()
+              handleNewChat()
+            }}
+          />
+        </Suspense>
+      )}
+      {systemSettingsOpen && (
+        <Suspense fallback={null}>
+          <SystemSettingsModal
+            open={systemSettingsOpen}
+            onClose={() => setSystemSettingsOpen(false)}
+          />
+        </Suspense>
+      )}
     </>
   )
 }
@@ -350,7 +379,7 @@ function App() {
   return (
     <>
       <Routes>
-        <Route path="/share/:token" element={<SharePage />} />
+        <Route path="/share/:token" element={<Suspense fallback={<div className="min-h-screen bg-[var(--color-surface-0)]" />}><SharePage /></Suspense>} />
         <Route path="/chat/:conversationId" element={<ChatApp />} />
         <Route path="/chat" element={<ChatApp />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />

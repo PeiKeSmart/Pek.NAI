@@ -2,14 +2,10 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using NewLife.AI.Models;
-using NewLife.AI.Services;
-using NewLife.Log;
 using NewLife.ChatAI.Controllers;
-using NewLife.ChatAI.Models;
-using NewLife.ChatAI.Services;
 using Xunit;
 
 namespace XUnitTest.Services;
@@ -23,23 +19,31 @@ public class ChatAITests
     {
         var setting = new ChatSetting();
 
-        Assert.Equal(30, setting.ShareExpireDays);
+        Assert.Equal(30, setting.ShareExpireMinutes);
         Assert.Equal(0, setting.DefaultModel);
         Assert.Equal(ThinkingMode.Auto, setting.DefaultThinkingMode);
-        Assert.Equal(10, setting.DefaultContextRounds);
+        Assert.Equal(20, setting.DefaultContextRounds);
         Assert.Equal(20, setting.MaxAttachmentSize);
-        Assert.Equal(5, setting.MaxAttachmentCount);
         Assert.True(setting.AutoGenerateTitle);
         //Assert.Contains("10个字", setting.TitlePrompt);
         Assert.Contains(".jpg", setting.AllowedExtensions);
         Assert.True(setting.EnableGateway);
         Assert.Equal(60, setting.GatewayRateLimit);
-        Assert.Equal(5, setting.UpstreamRetryCount);
         Assert.True(setting.EnableFunctionCalling);
-        Assert.True(setting.EnableMcp);
-        Assert.Equal("1024x1024", setting.DefaultImageSize);
+        Assert.Equal("1024*1024", setting.DefaultImageSize);
         Assert.True(setting.EnableUsageStats);
         Assert.True(setting.BackgroundGeneration);
+        Assert.Equal(50, setting.ToolSlotLimit);
+        Assert.Equal(SupportPosition.None, setting.SupportPosition);
+
+        // 对话/工具/学习默认值契约（前端 defaultSettings 需与此一致，防覆盖后端配置）
+        Assert.False(setting.EnableUserIsolation);
+        Assert.Equal(20, setting.MaxMessagesPerMinute);
+        Assert.Equal(10, setting.ToolMaxIterations);
+        Assert.Equal(80000, setting.ToolResultMaxChars);
+        Assert.Equal(150000, setting.SkillBudgetChars);
+        Assert.True(setting.EnableAutoLearning);
+        Assert.Equal(50, setting.MinLearningContentLength);
         //Assert.NotEmpty(setting.SuggestedQuestions);
     }
 
@@ -48,15 +52,15 @@ public class ChatAITests
     {
         var setting = new ChatSetting();
 
-        setting.ShareExpireDays = 0;
+        setting.ShareExpireMinutes = 0;
         setting.DefaultModel = 3;
         setting.GatewayRateLimit = 100;
-        setting.EnableMcp = false;
+        setting.SupportPosition = SupportPosition.FloatingButton;
 
-        Assert.Equal(0, setting.ShareExpireDays);
+        Assert.Equal(0, setting.ShareExpireMinutes);
         Assert.Equal(3, setting.DefaultModel);
         Assert.Equal(100, setting.GatewayRateLimit);
-        Assert.False(setting.EnableMcp);
+        Assert.Equal(SupportPosition.FloatingButton, setting.SupportPosition);
     }
 
     [Fact]
@@ -86,12 +90,11 @@ public class ChatAITests
     [Fact]
     public void ChatStreamEventMessageStartHasAllFields()
     {
-        var ev = ChatStreamEvent.MessageStart(1001, "qwen-max", ThinkingMode.Think);
+        var ev = ChatStreamEvent.MessageStart(1001, "qwen-max");
 
         Assert.Equal("message_start", ev.Type);
         Assert.Equal(1001, ev.MessageId);
         Assert.Equal("qwen-max", ev.Model);
-        Assert.Equal(ThinkingMode.Think, ev.ThinkingMode);
     }
 
     [Fact]
@@ -155,6 +158,44 @@ public class ChatAITests
     }
 
     [Fact]
+    public void ChatStreamEventErrorWithExceptionKeepsContract()
+    {
+        var ex = new InvalidOperationException("测试异常");
+        var ev = ChatStreamEvent.ErrorEvent("STREAM_ERROR", "测试消息", ex);
+
+        Assert.Equal("error", ev.Type);
+        Assert.Equal("STREAM_ERROR", ev.Code);
+        Assert.Equal("测试消息", ev.Message);
+    }
+
+    [Fact]
+    public void ChatStreamEventErrorWithExceptionMarksSpanError()
+    {
+        // DefaultTracer.Instance 可注入时验证：ErrorEvent 带异常会把 ai:StreamError 标记为错误埋点并保存异常样本
+        var prop = typeof(DefaultTracer).GetProperty("Instance", BindingFlags.Public | BindingFlags.Static)!;
+        if (!prop.CanWrite) return;
+
+        var tracer = new DefaultTracer();
+        var old = prop.GetValue(null);
+        try
+        {
+            prop.SetValue(null, tracer);
+
+            var ex = new InvalidOperationException("测试异常栈信息");
+            ChatStreamEvent.ErrorEvent("TEST_CODE", "测试消息", ex);
+
+            var builders = tracer.TakeAll();
+            var span = Assert.Single(builders, b => b.Name == "ai:StreamError");
+            Assert.True(span.Errors > 0);
+            Assert.NotEmpty(span.ErrorSamples);
+        }
+        finally
+        {
+            prop.SetValue(null, old);
+        }
+    }
+
+    [Fact]
     public void ChatStreamEventToolCallStartHasAllFields()
     {
         var ev = ChatStreamEvent.ToolCallStart("call_001", "get_weather", "{\"city\":\"北京\"}");
@@ -168,12 +209,11 @@ public class ChatAITests
     [Fact]
     public void ChatStreamEventToolCallDoneHasResult()
     {
-        var ev = ChatStreamEvent.ToolCallDone("call_001", "{\"temp\":25}", true);
+        var ev = ChatStreamEvent.ToolCallDone("call_001", "{\"temp\":25}");
 
         Assert.Equal("tool_call_done", ev.Type);
         Assert.Equal("call_001", ev.ToolCallId);
         Assert.Equal("{\"temp\":25}", ev.Result);
-        Assert.True(ev.Success);
     }
 
     [Fact]
@@ -199,14 +239,14 @@ public class ChatAITests
 
         var events = new[]
         {
-            ChatStreamEvent.MessageStart(1, "m", 0),
+            ChatStreamEvent.MessageStart(1, "m"),
             ChatStreamEvent.ThinkingDelta("t"),
             ChatStreamEvent.ThinkingDone(100),
             ChatStreamEvent.ContentDelta("c"),
             ChatStreamEvent.MessageDone(),
             ChatStreamEvent.ErrorEvent("e", "m"),
             ChatStreamEvent.ToolCallStart("id", "name", "args"),
-            ChatStreamEvent.ToolCallDone("id", "r", true),
+            ChatStreamEvent.ToolCallDone("id", "r"),
             ChatStreamEvent.ToolCallError("id", "err"),
         };
 
@@ -380,11 +420,16 @@ public class ChatAITests
         Assert.Equal(0, settings.DefaultModel);
 
         var updated = await service.UpdateUserSettingsAsync(
-            new UserSettingsDto("en", "dark", 18, "Ctrl+Enter", 3, ThinkingMode.Think, 20, "Stone", "Backend developer", ResponseStyle.Vivid, "You are helpful", false),
+            new UserSettingsDto("en", "dark", 18, "Ctrl+Enter", 3, ThinkingMode.Think, 20, "Stone", "Backend developer", ResponseStyle.Vivid, "You are helpful", false)
+            {
+                ThinkingLayout = ThinkingLayout.AboveCollapsed,
+            },
             CancellationToken.None);
         Assert.Equal("en", updated.Language);
         Assert.Equal("dark", updated.Theme);
         Assert.Equal(3, updated.DefaultModel);
+        // 推理过程布局（上方折叠）往返保留
+        Assert.Equal(ThinkingLayout.AboveCollapsed, updated.ThinkingLayout);
     }
 
     [Fact]
@@ -492,7 +537,7 @@ public class ChatAITests
     [Fact]
     public void AppKeyResponseDtoMasksSecret()
     {
-        var dto = new AppKeyResponseDto(1, "测试", "sk-ab****jk", true, "gpt-4o", null, 100, 5000, DateTime.Now, DateTime.Now);
+        var dto = new AppKeyResponseDto(1, "测试", "sk-ab****jk", true, "gpt-4o", null, DateTime.Now, DateTime.Now);
 
         Assert.Contains("****", dto.SecretMask);
         Assert.Equal(1, dto.Id);
@@ -517,6 +562,24 @@ public class ChatAITests
         Assert.Equal(0, (Int32)ThinkingMode.Auto);
         Assert.Equal(1, (Int32)ThinkingMode.Think);
         Assert.Equal(2, (Int32)ThinkingMode.Fast);
+    }
+
+    [Fact]
+    public void SupportPositionEnumHasExpectedValues()
+    {
+        Assert.Equal(0, (Int32)SupportPosition.None);
+        Assert.Equal(1, (Int32)SupportPosition.SidebarBottom);
+        Assert.Equal(2, (Int32)SupportPosition.BelowNewChat);
+        Assert.Equal(3, (Int32)SupportPosition.FloatingButton);
+    }
+
+    [Fact]
+    public void ThinkingLayoutEnumHasExpectedValues()
+    {
+        Assert.Equal(0, (Int32)ThinkingLayout.Default);
+        Assert.Equal(1, (Int32)ThinkingLayout.AboveCollapsed);
+        Assert.Equal(2, (Int32)ThinkingLayout.AboveExpanded);
+        Assert.Equal(3, (Int32)ThinkingLayout.Side);
     }
 
     [Fact]
@@ -640,7 +703,7 @@ public class ChatAITests
         var conv = await service.CreateConversationAsync(new CreateConversationRequest("旧标题", 0), CancellationToken.None);
         Assert.Equal("旧标题", conv.Title);
 
-        var updated = await service.UpdateConversationAsync(conv.Id, new UpdateConversationRequest("新标题", 0), CancellationToken.None);
+        var updated = await service.UpdateConversationAsync(conv.Id, new UpdateConversationRequest("新标题", 0, null), CancellationToken.None);
         Assert.NotNull(updated);
         Assert.Equal("新标题", updated.Title);
     }
@@ -649,7 +712,7 @@ public class ChatAITests
     public async Task UpdateNonExistentConversationReturnsNull()
     {
         var service = new InMemoryChatApplicationService();
-        var result = await service.UpdateConversationAsync(99999, new UpdateConversationRequest("test", 0), CancellationToken.None);
+        var result = await service.UpdateConversationAsync(99999, new UpdateConversationRequest("test", 0, null), CancellationToken.None);
         Assert.Null(result);
     }
 
@@ -678,7 +741,7 @@ public class ChatAITests
     }
 
     [Fact]
-    public async Task ShareWithNullExpireHours()
+    public async Task ShareWithNullExpireMinutes()
     {
         var service = new InMemoryChatApplicationService();
         var conv = await service.CreateConversationAsync(new CreateConversationRequest(null, 0), CancellationToken.None);
@@ -732,7 +795,7 @@ public class ChatAITests
     [Fact]
     public void ChatStreamEventMessageStartWithZeroValues()
     {
-        var ev = ChatStreamEvent.MessageStart(0, "", 0);
+        var ev = ChatStreamEvent.MessageStart(0, "");
         Assert.Equal("message_start", ev.Type);
         Assert.Equal(0, ev.MessageId);
         Assert.Equal("", ev.Model);
@@ -758,9 +821,8 @@ public class ChatAITests
     [Fact]
     public void ChatStreamEventToolCallDoneWithFailure()
     {
-        var ev = ChatStreamEvent.ToolCallDone("id", null, false);
+        var ev = ChatStreamEvent.ToolCallDone("id", null);
         Assert.Equal("tool_call_done", ev.Type);
-        Assert.False(ev.Success);
         Assert.Null(ev.Result);
     }
     #endregion
@@ -783,16 +845,16 @@ public class ChatAITests
     }
 
     [Fact]
-    public void CreateShareRequestWithExpireHours()
+    public void CreateShareRequestWithExpireMinutes()
     {
         var req = new CreateShareRequest(48);
-        Assert.Equal(48, req.ExpireHours);
+        Assert.Equal(48, req.ExpireMinutes);
     }
 
     [Fact]
     public void UpdateConversationRequestHasFields()
     {
-        var req = new UpdateConversationRequest("新标题", 3);
+        var req = new UpdateConversationRequest("新标题", 3, null);
         Assert.Equal("新标题", req.Title);
         Assert.Equal(3, req.ModelId);
     }
@@ -909,8 +971,8 @@ public class ChatAITests
     }
 
     [Fact]
-    [DisplayName("分享无过期时间时 ExpireTime 为 null")]
-    public async Task ShareWithoutExpireTimeHasNullExpireTime()
+    [DisplayName("分享未指定过期分钟数时使用默认30分钟")]
+    public async Task ShareWithNullExpireMinutesUsesDefault()
     {
         var service = new InMemoryChatApplicationService();
         var conv = await service.CreateConversationAsync(new CreateConversationRequest(null, 0), CancellationToken.None);
@@ -918,7 +980,8 @@ public class ChatAITests
 
         var share = await service.CreateShareLinkAsync(conv.Id, new CreateShareRequest(null), CancellationToken.None);
 
-        Assert.Null(share.ExpireTime);
+        Assert.NotNull(share.ExpireTime);
+        Assert.True(share.ExpireTime > DateTime.Now);
     }
     #endregion
 
@@ -936,10 +999,9 @@ public class ChatAITests
             chunks.Add(chunk);
         }
 
-        // message_start 事件应包含思考模式
+        // message_start 事件应存在
         var start = chunks.FirstOrDefault(e => e.Type == "message_start");
         Assert.NotNull(start);
-        Assert.Equal(ThinkingMode.Think, start.ThinkingMode);
     }
 
     [Fact]

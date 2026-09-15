@@ -11,89 +11,148 @@ namespace NewLife.ChatAI.Handlers;
 /// <para>注意：UsageService.Record 由 <c>UsageRecordHandler</c> 负责，本处理器仅写入消息/会话字段。</para>
 /// </remarks>
 [ChatHandlerOrder(9999)]
-public class PersistMessageHandler : IChatHandler, IChatHandlerScope
+public class PersistMessageHandler(ChatSetting setting) : ChatHandlerBase, IChatHandlerScope
 {
     /// <inheritdoc/>
-    /// <remarks>持久化处理器适用于所有来源，但内部由 PersistMessages 加以守卫</remarks>
+    /// <remarks>持久化处理器适用于所有来源</remarks>
     public ChatFlowSource SupportedSources => ChatFlowSource.All;
 
     /// <inheritdoc/>
-    /// <remarks>持久化是粿心能力，始终保留在链中；是否真正写入由 PersistMessages 决定</remarks>
+    /// <remarks>持久化是核心能力，始终保留在链中</remarks>
     public ChatHandlerTier Tier => ChatHandlerTier.Core;
 
-    /// <inheritdoc/>
-    public ChatHandlerCapabilities Capabilities => ChatHandlerCapabilities.Before | ChatHandlerCapabilities.After;
+    ///// <inheritdoc/>
+    //public ChatHandlerCapabilities Capabilities => ChatHandlerCapabilities.Before | ChatHandlerCapabilities.After;
 
     /// <inheritdoc/>
-    public Task OnBefore(IChatContext context, CancellationToken cancellationToken)
+    public override Task OnBefore(IChatContext context, CancellationToken cancellationToken)
     {
-        // 未开启持久化时跳过数据库写入
-        if (!context.PersistMessages) return Task.CompletedTask;
-
-        //if (context is not MessageFlowContext flow) return Task.CompletedTask;
-
-        // 用户消息
-        if (context.UserMessage is DbChatMessage userMessage)
+        // 未开启持久化时跳过数据库写入（网关场景：领域模式开启才记录；渠道场景：领域模式开启才持久化）
+        if (context.Source.HasFlag(ChatFlowSource.Web) ||
+            context.Source.HasFlag(ChatFlowSource.Gateway) && setting.EnableGatewayDomainMode
+#if STARCHAT
+            || context.Source.HasFlag(ChatFlowSource.Channel) && setting.EnableChannelDomainMode
+#endif
+            )
         {
-            // 提取系统提示词（首个 system 消息）
-            userMessage.ThinkingContent = context.ContextMessages.FirstOrDefault(m => m.Role == "system")?.Content as String;
-            userMessage.ToolNames = context.AvailableToolNames?.Join();
-            userMessage.Update();
+            // 用户消息
+            if (context.UserMessage is DbChatMessage userMessage)
+            {
+                // 提取最终 system 消息全文：与 FlushSystemSegments 逻辑对齐，
+                // 拼接 ContextMessages[首个system] + SystemSegments + TailSegments，完整还原发给 LLM 的内容
+                var systemContent = context.ContextMessages.FirstOrDefault(m => m.Role == "system")?.Content as String;
+                var hasMiddle = context.SystemSegments.Count > 0;
+                var hasTail = context.TailSegments.Count > 0;
+                if (hasMiddle || hasTail)
+                {
+                    var parts = new List<String>(context.SystemSegments.Count + context.TailSegments.Count);
+                    foreach (var s in context.SystemSegments)
+                        parts.Add(s);
+                    foreach (var s in context.TailSegments)
+                        parts.Add(s);
+                    var extra = String.Join("\n\n", parts);
+                    systemContent = systemContent.IsNullOrEmpty() ? extra : systemContent + "\n\n" + extra;
+                }
+                userMessage.ThinkingContent = systemContent;
+                // Before 阶段 AvailableToolNames 尚未填充（由 BuildPipelineClient 在 Core 阶段填充），
+                // 此处保存用户 @引用的工具（SelectedTools），After 阶段再覆盖为实际注入 LLM 的工具
+                if (context.SelectedTools.Count > 0)
+                    userMessage.ToolNames = String.Join(",", context.SelectedTools);
+                userMessage.Update();
+            }
+
+            // 助手消息 Before 快照：尽早记录激活技能，便于极端错误（管道构建失败）时分析
+            if (context.AssistantMessage is DbChatMessage assistantBefore)
+            {
+                // 记录本轮激活的非系统技能
+                var activatedSkills = context.ActivatedSkills
+                    .Where(s => !s.IsSystem && !s.Name.IsNullOrEmpty())
+                    .Select(s => s.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (activatedSkills.Count > 0)
+                    assistantBefore.SkillNames = String.Join(",", activatedSkills);
+                assistantBefore.Update();
+            }
         }
 
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public Task OnAfter(IChatContext context, CancellationToken cancellationToken)
+    public override Task OnAfter(IChatContext context, CancellationToken cancellationToken)
     {
-        // 未开启持久化时跳过数据库写入
-        if (!context.PersistMessages) return Task.CompletedTask;
-
-        //if (context is not MessageFlowContext flow) return Task.CompletedTask;
-        //using var span = tracer?.NewSpan("handler:PersistMessage");
-
-        // 助手消息
-        if (context.AssistantMessage is DbChatMessage assistantMsg)
+        // 未开启持久化时跳过数据库写入（网关场景：领域模式开启才记录；渠道场景：领域模式开启才持久化）
+        if (context.Source.HasFlag(ChatFlowSource.Web) ||
+            context.Source.HasFlag(ChatFlowSource.Gateway) && setting.EnableGatewayDomainMode
+#if STARCHAT
+            || context.Source.HasFlag(ChatFlowSource.Channel) && setting.EnableChannelDomainMode
+#endif
+            )
         {
-            // 写入消息内容
-            assistantMsg.Content = context.ContentBuilder.ToString();
-            assistantMsg.ThinkingContent = context.ThinkingBuilder.ToString();
-            var toolCalls = context.ToolCalls;
-            if (toolCalls.Count > 0)
+
+            // 助手消息
+            if (context.AssistantMessage is DbChatMessage assistantMsg)
             {
-                assistantMsg.ToolCalls = toolCalls.ToJson();
-                assistantMsg.ToolNames = toolCalls.Select(t => t.Name).Distinct().Join();
+                // 写入消息内容
+                assistantMsg.Content = context.ContentBuilder.ToString();
+                assistantMsg.ThinkingContent = context.ThinkingBuilder.ToString();
+                var toolCalls = context.ToolCalls;
+                if (toolCalls.Count > 0)
+                {
+                    // 工具信息序列化跳过 null 值字段（未执行的入参/出参等省略），存储与解析均更精简
+                    assistantMsg.ToolCalls = toolCalls.ToJson(new JsonOptions { IgnoreNullValues = true });
+                    assistantMsg.ToolNames = toolCalls.Select(t => t.Name).Distinct().Join();
+                }
+
+                // 记录本轮激活的非系统技能（Loop 过程中可能变化，覆盖 Before 快照）
+                var activatedSkills = context.ActivatedSkills
+                    .Where(s => !s.IsSystem && !s.Name.IsNullOrEmpty())
+                    .Select(s => s.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (activatedSkills.Count > 0)
+                    assistantMsg.SkillNames = String.Join(",", activatedSkills);
+
+                // 用量与请求参数（不记录到 UsageService，仅写入消息字段）
+                ApplyUsageToMessage(assistantMsg, context.Usage, context.HasError, (context as MessageFlowContext)?.DeferredError?.Error);
+                ApplyRequestParams(assistantMsg, context.ModelConfig, context);
+
+#if STARCHAT
+                // 工具调用剥离：完整调用链（含入参/出参，巨型结果压缩）写入独立分片表 ChatToolCall，消息仅存不含参数的摘要，瘦身消息表
+                if (!assistantMsg.ToolCalls.IsNullOrEmpty())
+                    assistantMsg.ToolCalls = NewLife.StarChat.Services.ToolCallStore.Split(assistantMsg.ConversationId, assistantMsg.Id, assistantMsg.ToolCalls);
+#endif
+                assistantMsg.Update();
             }
 
-            // 用量与请求参数（不记录到 UsageService，仅写入消息字段）
-            ApplyUsageToMessage(assistantMsg, context.Usage, context.HasError, (context as MessageFlowContext)?.DeferredError?.Error);
-            ApplyRequestParams(assistantMsg, context.ModelConfig, context);
-            assistantMsg.Update();
-        }
-
-        // 用户消息
-        if (context.UserMessage is DbChatMessage userMessage)
-        {
-            userMessage.ThinkingContent = context.ContextMessages.FirstOrDefault(m => m.Role == "system")?.Content as String;
-            userMessage.ToolNames = context.AvailableToolNames?.Join();
-            userMessage.Update();
-        }
-
-        // 会话
-        if (context.Conversation is Conversation conversation)
-        {
-            conversation.LastMessageTime = DateTime.Now;
-            conversation.MessageCount = DbChatMessage.CountByConversationId(conversation.Id);
-            if (context.Usage != null)
+            // 用户消息
+            if (context.UserMessage is DbChatMessage userMessage)
             {
-                conversation.InputTokens += context.Usage.InputTokens;
-                conversation.OutputTokens += context.Usage.OutputTokens;
-                conversation.TotalTokens += context.Usage.TotalTokens;
-                conversation.ElapsedMs += context.Usage.ElapsedMs;
+                userMessage.ThinkingContent = context.ContextMessages?.FirstOrDefault(m => m.Role == "system")?.Content as String;
+                userMessage.ToolNames = context.AvailableToolNames?.Join();
+                userMessage.Update();
             }
-            if (context.ModelConfig != null) conversation.ModelName = context.ModelConfig.Name;
-            conversation.Update();
+
+            // 会话
+            if (context.Conversation is Conversation conversation)
+            {
+                conversation.LastMessageTime = DateTime.Now;
+                conversation.MessageCount = DbChatMessage.CountByConversationId(conversation.Id);
+                if (context.Usage != null)
+                {
+                    conversation.InputTokens += context.Usage.InputTokens;
+                    conversation.OutputTokens += context.Usage.OutputTokens;
+                    conversation.TotalTokens += context.Usage.TotalTokens;
+                    conversation.ElapsedMs += context.Usage.ElapsedMs;
+                }
+                if (context.ModelConfig != null) conversation.ModelName = context.ModelConfig.Name;
+
+                // 聚合会话级技能列表：合并本轮用户消息 SkillNames 与会话已有 SkillNames，去重
+                MergeConversationSkillNames(context, conversation);
+
+                conversation.Update();
+            }
         }
 
         return Task.CompletedTask;
@@ -108,16 +167,22 @@ public class PersistMessageHandler : IChatHandler, IChatHandlerScope
     {
         if (msg.Content.IsNullOrEmpty())
         {
+            // 空内容兜底：无论是否携带思考内容都写入可见提示，避免用户看到空白消息。
+            // 思考内容已在上方从 ThinkingBuilder 写入 ThinkingContent，此处不覆盖；
+            // 历史缺陷：Content 为空 + 无错误 + ThinkingContent 非空时 Content 保持空，导致消息落库为空白
             if (hasError)
                 msg.Content = errorDetail.IsNullOrEmpty() ? "[生成失败]" : $"[生成失败] {errorDetail}";
-            else if (msg.ThinkingContent.IsNullOrEmpty())
+            else
                 msg.Content = "[已中断]";
         }
         else if (hasError && !errorDetail.IsNullOrEmpty())
         {
             msg.Content += $"\n\n[错误] {errorDetail}";
         }
-        if (usage != null)
+
+        // 仅当 LLM 返回有效 Token 数据时才写入，避免用全零 UsageDetails 覆盖消息已有数据
+        // （全零 UsageDetails 通常来自异常路径中 lastUsage ??= new UsageDetails() 创建的虚假对象）
+        if (usage is { TotalTokens: > 0 })
         {
             msg.InputTokens = usage.InputTokens;
             msg.OutputTokens = usage.OutputTokens;
@@ -133,8 +198,41 @@ public class PersistMessageHandler : IChatHandler, IChatHandlerScope
     private static void ApplyRequestParams(IChatMessage msg, IModelConfig modelConfig, IChatContext context)
     {
         msg.ModelName = modelConfig.Code;
-        if (context.MaxTokens > 0) msg.MaxTokens = context.MaxTokens;
-        if (context.Temperature != null) msg.Temperature = context.Temperature.Value;
+        if (context.Options.MaxTokens > 0) msg.MaxTokens = context.Options.MaxTokens.Value;
+        if (context.Options.Temperature != null) msg.Temperature = context.Options.Temperature.Value;
         if (!context.FinishReason.IsNullOrEmpty()) msg.FinishReason = context.FinishReason;
+    }
+
+    /// <summary>合并本轮消息的技能到会话级技能列表，去重</summary>
+    private static void MergeConversationSkillNames(IChatContext context, Conversation conversation)
+    {
+        //// 收集本轮用户消息的 SkillNames
+        //var newSkills = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
+        //if (context.UserMessage is DbChatMessage userMsg && !userMsg.SkillNames.IsNullOrEmpty())
+        //{
+        //    foreach (var s in userMsg.SkillNames!.Split(','))
+        //    {
+        //        var trimmed = s.Trim();
+        //        if (!trimmed.IsNullOrEmpty()) newSkills.Add(trimmed);
+        //    }
+        //}
+
+        //if (newSkills.Count == 0) return;
+
+        //// 合并会话已有 SkillNames
+        //if (!conversation.SkillNames.IsNullOrEmpty())
+        //{
+        //    foreach (var s in conversation.SkillNames!.Split(','))
+        //    {
+        //        var trimmed = s.Trim();
+        //        if (!trimmed.IsNullOrEmpty()) newSkills.Add(trimmed);
+        //    }
+        //}
+
+        //conversation.SkillNames = String.Join(",", newSkills);
+        if (conversation.SkillName.IsNullOrEmpty() && context.UserMessage is DbChatMessage userMsg)
+        {
+            conversation.SkillName = userMsg.SkillNames?.Split(',').FirstOrDefault();
+        }
     }
 }

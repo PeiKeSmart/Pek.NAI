@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Models;
 using NewLife.Log;
 using NewLife.Reflection;
@@ -35,19 +36,50 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
         set => _defaultEndpoint = value;
     }
 
-    /// <summary>HTTP 请求超时时间。默认 120 秒</summary>
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(120);
+    /// <summary>HTTP 请求超时时间。默认 300 秒。流式场景（思考模式生成 SVG/HTML 等大内容）可能耗时较长，避免总时长超时导致链路中断</summary>
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(300);
 
     /// <summary>对话完成路径。为空时子类使用自身默认值；平台注册时可由注册表覆盖（如将 /v1/chat/completions 改为 /chat/completions）</summary>
     public virtual String ChatPath { get; set; } = "";
 
     private HttpClient? _httpClient;
+    // A-59：标记 HttpClient 是否为内部创建。内部创建的由本类 Dispose 释放；外部注入的由注入方负责
+    private Boolean _ownsHttpClient;
+    // 惰性初始化锁：并发首访双创建会泄漏一个连接池，getter/setter/Dispose 统一加锁
+    private readonly Object _httpLock = new();
 
     /// <summary>HTTP 客户端。首次访问时自动创建；可替换为代理、自定义管道或测试用 Mock</summary>
     public HttpClient HttpClient
     {
-        get => _httpClient ??= CreateHttpClient();
-        set => _httpClient = value;
+        get
+        {
+            // 双检锁：首次访问加锁创建，避免并发首访各自 new 一个 handler/连接池
+            if (_httpClient == null)
+            {
+                lock (_httpLock)
+                {
+                    if (_httpClient == null)
+                    {
+                        _httpClient = CreateHttpClient();
+                        _ownsHttpClient = true;
+                    }
+                }
+            }
+            return _httpClient;
+        }
+        set
+        {
+            lock (_httpLock)
+            {
+                // 替换外部客户端时，若此前持有内部创建实例则先释放
+                if (_ownsHttpClient)
+                {
+                    _httpClient?.Dispose();
+                    _ownsHttpClient = false;
+                }
+                _httpClient = value;
+            }
+        }
     }
 
     /// <summary>JSON 处理器。默认使用 SystemJson，映射到 System.Text.Json </summary>
@@ -59,7 +91,7 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     /// <summary>连接选项</summary>
     protected readonly AiClientOptions _options;
 
-    private static IJsonHost _host;
+    private static readonly IJsonHost _host;
     #endregion
 
     #region 构造
@@ -101,11 +133,10 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     /// <returns>新的 HttpClient 实例</returns>
     protected virtual HttpClient CreateHttpClient()
     {
-        var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-        };
-        var client = new HttpClient(handler)
+        // 池化 HttpMessageHandler（按 Endpoint 主机分组），连接复用避免每次新建连接池导致 socket 与内存膨胀；
+        // disposeHandler:false 使 Dispose 只释放 HttpClient 对象，不关闭共享 handler 的连接池
+        var handler = HttpClientPool.GetHandler(_options.GetEndpoint(DefaultEndpoint));
+        var client = new HttpClient(handler, disposeHandler: false)
         {
             Timeout = Timeout,
         };
@@ -113,8 +144,20 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
         return client;
     }
 
-    /// <summary>释放资源</summary>
-    public virtual void Dispose() { }
+    /// <summary>释放资源。只释放内部创建的 HttpClient（外部注入的由注入方负责）</summary>
+    public virtual void Dispose()
+    {
+        // A-59：原空实现导致内部创建的 HttpClient 及其连接池从不释放
+        lock (_httpLock)
+        {
+            if (_ownsHttpClient)
+            {
+                _httpClient?.Dispose();
+                _ownsHttpClient = false;
+            }
+            _httpClient = null;
+        }
+    }
     #endregion
 
     #region 核心方法
@@ -131,15 +174,29 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
         if (request.Model.IsNullOrEmpty()) request.Model = _options.Model;
 
         var startMs = Runtime.TickCount64;
-        using var span = Tracer?.NewSpan($"ai:Chat:{request.Model}", request.Messages?.FirstOrDefault()?.Content);
+        using var span = Tracer?.NewSpan($"ai:Chat:{request.Model}");
+        if (span != null)
+        {
+            var txt = request.Messages?.LastOrDefault()?.Content as String;
+            if (!txt.IsNullOrEmpty())
+                span.AppendTag($"\n=>[{txt.Length}]\n{(txt.Length > 500 ? txt[..500] : txt)}");
+        }
         try
         {
-            var response = await ChatAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await ChatAsync(request, cancellationToken);
             if (response.Usage != null)
             {
                 response.Usage.ElapsedMs = (Int32)(Runtime.TickCount64 - startMs);
                 span?.Value = response.Usage.TotalTokens;
             }
+
+            if (span != null)
+            {
+                var txt = response.Text;
+                if (!txt.IsNullOrEmpty())
+                    span.AppendTag($"\n<=[{txt.Length}]\n{txt}");
+            }
+
             return response;
         }
         catch (Exception ex)
@@ -163,15 +220,19 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
         if (request.Model.IsNullOrEmpty()) request.Model = _options.Model;
 
         var startMs = Runtime.TickCount64;
-        using var span = Tracer?.NewSpan($"ai:Streaming:{request.Model}", request.Messages?.FirstOrDefault()?.Content);
+        using var span = Tracer?.NewSpan($"ai:Streaming:{request.Model}", request.Messages?.LastOrDefault()?.Content);
 
         UsageDetails? lastUsage = null;
         await foreach (var chunk in ChatStreamAsync(request, cancellationToken).ConfigureAwait(false))
         {
             if (chunk.Usage != null)
             {
-                lastUsage = chunk.Usage;
+                // 合并同一轮 LLM 调用的 chunk 用量并回写，保证下游取末 chunk 用量时数据完整：
+                // OpenAI 等协议最后一个 chunk 含完整用量（默认策略返回 incoming），
+                // Anthropic 等协议将 input/output 拆到不同 chunk，需按 MergeChunkUsage 局部填充合并
+                lastUsage = MergeChunkUsage(lastUsage, chunk.Usage);
                 lastUsage.ElapsedMs = (Int32)(Runtime.TickCount64 - startMs);
+                chunk.Usage = lastUsage;
             }
             yield return chunk;
         }
@@ -228,16 +289,20 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     /// <param name="options">连接选项</param>
     protected virtual void SetHeaders(HttpRequestMessage request, IChatRequest? chatRequest, AiClientOptions options) { }
 
-    private static readonly Regex _endpointVersionRx = new Regex(@"/v\d+$", RegexOptions.Compiled);
-    private static readonly Regex _pathVersionRx = new Regex(@"^/v\d+", RegexOptions.Compiled);
+    // 支持 /v1、/v2、/v1beta 等版本段（Gemini 使用 v1beta）（A-73）
+    private static readonly Regex _endpointVersionRx = new Regex(@"/v\d+(?:beta)?$", RegexOptions.Compiled);
+    private static readonly Regex _pathVersionRx = new Regex(@"^/v\d+(?:beta)?", RegexOptions.Compiled);
 
     /// <summary>智能拼接 API 地址与路径。若 endpoint 末尾已含版本段（如 /v1、/v2），则自动去掉 path 开头的版本前缀，避免产生 /v1/v1 或 /v2/v1 的错误路径。</summary>
     /// <param name="endpoint">服务端点，如 https://api.openai.com 或 https://example.com/v1</param>
-    /// <param name="path">API 路径，如 /v1/chat/completions</param>
+    /// <param name="path">API 路径，如 /v1/chat/completions 或 v1/chat/completions</param>
     /// <returns>完整请求 URL</returns>
     public static String CombineApiUrl(String endpoint, String path)
     {
         var base_ = endpoint.TrimEnd('/');
+        // A-68：path 无前导斜杠时规范化（如 "v1/chat/completions"），避免拼出畸形 URL
+        if (!path.StartsWith("/", StringComparison.Ordinal))
+            path = "/" + path;
         if (_endpointVersionRx.IsMatch(base_))
             path = _pathVersionRx.Replace(path, String.Empty);
         return base_ + path;
@@ -247,9 +312,186 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     /// <param name="path">API 路径，如 /v1/chat/completions</param>
     /// <returns>完整请求 URL</returns>
     protected String BuildApiUrl(String path) => CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), path);
+
+    /// <summary>创建 API 异常。上下文超限错误升级为 <see cref="ContextLengthExceededException"/>，便于调用方识别并转为友好提示</summary>
+    /// <param name="code">HTTP 状态码</param>
+    /// <param name="body">服务商错误响应体</param>
+    /// <returns>API 异常实例</returns>
+    private static ApiException CreateApiException(Int32 code, String body)
+        => ChatErrorHelper.IsContextLengthError(body)
+            ? new ContextLengthExceededException(code, body)
+            : new ApiException(code, body);
+
+    /// <summary>检测流式 data 中的服务商错误对象。OpenAI 兼容协议错误格式为 {"error":{"message":"...","code":"..."}}，命中时抛 <see cref="HttpRequestException"/> 而非静默吞掉</summary>
+    /// <param name="data">SSE data 行内容</param>
+    /// <param name="name">客户端名称，用于错误信息</param>
+    protected static void EnsureNoStreamError(String data, String name)
+    {
+        if (data.IsNullOrEmpty() || !data.Contains("\"error\"", StringComparison.OrdinalIgnoreCase)) return;
+
+        var errDic = JsonParser.Decode(data);
+        var err = errDic?["error"] as IDictionary<String, Object>;
+        var code = err?["code"] as String;
+        var message = err?["message"] as String ?? data;
+        var text = $"[{name}] 流式错误 {(code.IsNullOrEmpty() ? "" : code + " ")}{message}";
+
+        // 上下文超限：升级为类型化异常，便于上层识别并转为友好提示
+        if (ChatErrorHelper.IsContextLengthError(text))
+            throw new ContextLengthExceededException(400, text);
+
+        throw new HttpRequestException(text);
+    }
+
+    /// <summary>记录流式数据块解析失败。畸形数据块跳过不中断整个流，但记录日志与埋点便于排查协议漂移与服务商格式变化</summary>
+    /// <param name="data">原始数据块</param>
+    /// <param name="ex">解析异常</param>
+    protected void LogParseChunkError(String data, Exception ex)
+    {
+        var txt = data.Length > 200 ? data[..200] + "..." : data;
+        Log.Warn("[{0}] 解析流式块失败，已跳过: {1}\r\n块内容: {2}", Name, ex.Message, txt);
+
+        // 埋点标记异常，供星尘监控统计流式块解析失败（协议漂移 / 服务商格式变化）
+        using var span = Tracer?.NewSpan($"ai:ParseChunkError:{Name}", txt);
+        span?.SetError(ex, null);
+    }
+    #endregion
+
+    #region 模型识别
+    // 模型名切分正则：任意非字母数字（空格/横线/下划线/斜杠/点/冒号等）均作分隔符，如 text-embedding-3 → [text, embedding, 3]
+    private static readonly Regex _modelWordRx = new Regex("[^A-Za-z0-9]+", RegexOptions.Compiled);
+
+    /// <summary>判断模型标识分词后是否含指定能力词形（忽略大小写）。能力词形显式列举，如嵌入需写 embed/embedding/embeddings</summary>
+    /// <param name="modelId">模型标识</param>
+    /// <param name="words">能力词形列表</param>
+    /// <returns>任一分词与任一能力词形相等返回 true；输入为空返回 false</returns>
+    protected static Boolean MatchModelWord(String? modelId, params String[] words)
+    {
+        if (modelId.IsNullOrEmpty() || words.Length == 0) return false;
+
+        var parts = _modelWordRx.Split(modelId!);
+        foreach (var part in parts)
+        {
+            if (part.Length == 0) continue;
+            foreach (var word in words)
+            {
+                if (part.Equals(word, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>识别模型标识中的非对话能力（嵌入/重排序/语音合成/语音识别）。按分词词形匹配，命中返回对应能力（不支持函数调用），可附加价格</summary>
+    /// <remarks>词形显式列举：嵌入 embed/embedding/embeddings、重排序 rerank/reranker/reranking、语音合成 tts、语音识别 whisper。
+    /// 基类默认不带价；OpenAI/DashScope 等服务商可传入各自定价（元/百万Token）。</remarks>
+    /// <param name="modelId">模型标识</param>
+    /// <param name="embedPricing">嵌入模型定价，为空表示价格由上层兜底</param>
+    /// <param name="rerankPricing">重排序模型定价</param>
+    /// <param name="ttsPricing">语音合成模型定价</param>
+    /// <param name="asrPricing">语音识别模型定价</param>
+    /// <returns>命中返回对应能力对象，未命中返回 null</returns>
+    protected AiProviderCapabilities? InferNonChatCapabilities(String? modelId, AiModelPricing? embedPricing = null, AiModelPricing? rerankPricing = null, AiModelPricing? ttsPricing = null, AiModelPricing? asrPricing = null)
+    {
+        if (modelId.IsNullOrEmpty()) return null;
+
+        // 嵌入：text-embedding-3 / embedding-v3 / mistral-embed 等
+        if (MatchModelWord(modelId, "embed", "embedding", "embeddings"))
+            return new AiProviderCapabilities(SupportEmbedding: true, SupportFunction: false, Pricing: embedPricing);
+        // 重排序：bge-reranker / qwen3-rerank 等
+        if (MatchModelWord(modelId, "rerank", "reranker", "reranking"))
+            return new AiProviderCapabilities(SupportRerank: true, SupportFunction: false, Pricing: rerankPricing);
+        // 语音合成：tts-1 / qwen3-tts-flash 等
+        if (MatchModelWord(modelId, "tts"))
+            return new AiProviderCapabilities(SupportSpeech: true, SupportFunction: false, Pricing: ttsPricing);
+        // 语音识别：whisper-1 等
+        if (MatchModelWord(modelId, "whisper"))
+            return new AiProviderCapabilities(SupportAudio: true, SupportFunction: false, Pricing: asrPricing);
+        return null;
+    }
+
+    /// <summary>根据模型 ID 命名规律推断模型能力。默认实现：非对话模型（嵌入/重排/语音）直接识别 → 全局模型家族规则匹配
+    /// （qwen/deepseek/claude/gemini/glm/kimi/doubao 等，跨协议共享）→ 通用命名启发式兑底。服务商子类可重写细化。</summary>
+    /// <remarks>
+    /// 家族只承载特性（思考/工具/视觉/音频/上下文/推理强度），不含价格——价格由 <see cref="AiClientModelAttribute"/> 精确注册
+    /// （描述符优先）与部署侧模型元数据表（ModelData/*.json）及能力分级兑底提供。
+    /// <see cref="OpenAIClientBase"/> 覆盖本方法，在家族基础上补充 OpenAI 专属命名启发式与服务商层价格探测。
+    /// 基类默认实现供 Anthropic/Gemini/Bedrock/Ollama 等非 OpenAI 协议客户端直接继承使用。
+    /// </remarks>
+    /// <param name="modelId">模型标识</param>
+    /// <returns>推断出的能力信息，无法推断时返回 null</returns>
+    public virtual AiProviderCapabilities? InferModelCapabilities(String? modelId)
+    {
+        if (modelId.IsNullOrEmpty()) return null;
+
+        // 非对话模型（价格由上层处理）：嵌入、重排序、语音合成、语音识别（分词词形匹配）
+        var nc = InferNonChatCapabilities(modelId);
+        if (nc != null) return nc;
+
+        // 全局模型家族规则（跨协议共享）：家族只承载特性，不含价格
+        var familyCaps = ModelFamilyRegistry.Match(modelId);
+        if (familyCaps != null) return familyCaps;
+
+        // 通用命名启发式兑底（非任何家族的新模型）：vision/vl 视觉、reasoner/thinking 思考（分词词形匹配）
+        var vision = MatchModelWord(modelId, "vision", "vl");
+        var thinking = MatchModelWord(modelId, "reasoner", "thinking");
+        return new AiProviderCapabilities(SupportThinking: thinking, SupportFunction: true, SupportVision: vision);
+    }
+
+    /// <summary>根据模型 ID 推断可读显示名称。将连字符分隔的各段首字母大写，如 qwen3.7-max → Qwen3.7 Max。
+    /// 已在 <see cref="AiClientDescriptor"/> 注册的模型优先使用 DisplayName 属性，此方法作为未注册模型的兑底推断</summary>
+    /// <param name="modelId">模型标识</param>
+    /// <returns>推断出的显示名称，输入为空时返回 null</returns>
+    public virtual String? InferModelDisplayName(String? modelId)
+    {
+        if (modelId.IsNullOrEmpty()) return null;
+
+        var parts = modelId!.Split('-');
+        var sb = new StringBuilder();
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (i > 0) sb.Append(' ');
+            var part = parts[i];
+            if (part.Length > 0 && Char.IsLower(part[0]))
+            {
+                sb.Append(Char.ToUpper(part[0]));
+                if (part.Length > 1) sb.Append(part, 1, part.Length - 1);
+            }
+            else
+                sb.Append(part);
+        }
+        return sb.ToString();
+    }
     #endregion
 
     #region Http请求
+    /// <summary>是否应对本次失败重试。仅 429 限流、5xx 服务端错误、网络异常（含超时，非用户取消）可重试；4xx 客户端错误不重试</summary>
+    /// <param name="ex">捕获的异常</param>
+    /// <param name="index">当前已重试次数</param>
+    /// <param name="retry">允许的最大重试次数</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>应重试返回 true</returns>
+    private static Boolean ShouldRetry(Exception ex, Int32 index, Int32 retry, CancellationToken cancellationToken)
+    {
+        if (index >= retry || cancellationToken.IsCancellationRequested) return false;
+
+        if (ex is ApiException api) return api.Code == 429 || (api.Code >= 500 && api.Code <= 599);
+
+        // 网络异常或超时：HttpRequestException、OperationCanceledException（HttpClient 超时抛出，非用户取消）
+        if (ex is HttpRequestException) return true;
+        if (ex is OperationCanceledException) return true;
+
+        return false;
+    }
+
+    /// <summary>计算重试等待时间（毫秒）。指数退避：基础间隔 × 2^序号，上限 30 秒</summary>
+    /// <param name="options">连接选项</param>
+    /// <param name="index">当前已重试次数</param>
+    /// <returns>等待毫秒数</returns>
+    private static Int32 GetRetryDelay(AiClientOptions options, Int32 index)
+    {
+        var ms = Math.Min(options.RetryIntervalMs * (1 << index), 30_000);
+        return ms > 0 ? ms : 1000;
+    }
+
     /// <summary>发送 GET 请求并返回响应字符串。非 2xx 时抛出 HttpRequestException</summary>
     /// <param name="url">请求地址</param>
     /// <param name="chatRequest">对话请求，可为 null，传递给 SetHeaders 以支持运行时参数覆盖</param>
@@ -260,10 +502,10 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         SetHeaders(req, chatRequest, options);
-        var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
+        using var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
         var json = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
-            throw new ApiException((Int32)resp.StatusCode, json);
+            throw CreateApiException((Int32)resp.StatusCode, json);
         //throw new HttpRequestException($"AI 服务商[{Name}]返回错误 {(Int32)resp.StatusCode}: {json}");
         return json;
     }
@@ -277,19 +519,38 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         SetHeaders(req, null, options);
-        var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
+        using var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode) return null;
         return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
     }
 
-    /// <summary>发送 POST 请求并返回响应字符串。非 2xx 时抛出 HttpRequestException</summary>
+    /// <summary>发送 POST 请求并返回响应字符串。非 2xx 时抛出 HttpRequestException；RetryCount&gt;0 时对 429/5xx/网络异常自动指数退避重试</summary>
     /// <param name="url">请求地址</param>
     /// <param name="body">请求体，字符串直接使用，其它对象序列化为 JSON</param>
     /// <param name="chatRequest">对话请求，可为 null，传递给 SetHeaders 以支持运行时参数覆盖</param>
-    /// <param name="options">连接选项</param>
+    /// <param name="options">连接选项。RetryCount 控制重试次数，RetryIntervalMs 控制退避基础间隔</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>响应字符串</returns>
     protected async Task<String> PostAsync(String url, Object? body, IChatRequest? chatRequest, AiClientOptions options, CancellationToken cancellationToken = default)
+    {
+        var retry = options.RetryCount;
+        for (var i = 0; ; i++)
+        {
+            try
+            {
+                return await PostOnceAsync(url, body, chatRequest, options, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ShouldRetry(ex, i, retry, cancellationToken))
+            {
+                var delay = GetRetryDelay(options, i);
+                Log.Warn("[{0}] 请求失败，第 {1} 次重试（共 {2} 次），等待 {3}ms: {4}", Name, i + 1, retry, delay, ex.Message);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>发送单次 POST 请求并返回响应字符串</summary>
+    private async Task<String> PostOnceAsync(String url, Object? body, IChatRequest? chatRequest, AiClientOptions options, CancellationToken cancellationToken)
     {
         var bodyStr = body is String s ? s : JsonHost.Write(body!, JsonOptions!) ?? "";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
@@ -297,10 +558,10 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
             Content = new StringContent(bodyStr, Encoding.UTF8, "application/json"),
         };
         SetHeaders(req, chatRequest, options);
-        var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
+        using var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
         var json = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
-            throw new ApiException((Int32)resp.StatusCode, json);
+            throw CreateApiException((Int32)resp.StatusCode, json);
         //throw new HttpRequestException($"AI 服务商[{Name}]返回错误 {(Int32)resp.StatusCode}: {json}");
         return json;
     }
@@ -319,19 +580,38 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
             Content = new StringContent(bodyStr, Encoding.UTF8, "application/json"),
         };
         SetHeaders(req, null, options);
-        var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
+        using var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode) return null;
         return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
     }
 
-    /// <summary>发送 POST 流式请求，返回已通过状态检查的 HttpResponseMessage。非 2xx 时抛出 HttpRequestException</summary>
+    /// <summary>发送 POST 流式请求，返回已通过状态检查的 HttpResponseMessage。非 2xx 时抛出 HttpRequestException；RetryCount&gt;0 时对 429/5xx/网络异常自动指数退避重试（仅首字节前，数据未消费可安全重试）</summary>
     /// <param name="url">请求地址</param>
     /// <param name="body">请求体，字符串直接使用，其它对象序列化为 JSON</param>
-    /// <param name="options">连接选项</param>
+    /// <param name="options">连接选项。RetryCount 控制重试次数，RetryIntervalMs 控制退避基础间隔</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <param name="chatRequest">对话请求，可为 null，传递给 SetHeaders / SetStreamingHeaders 以支持运行时参数覆盖</param>
     /// <returns>HttpResponseMessage，调用方负责 Dispose</returns>
     protected async Task<HttpResponseMessage> PostStreamAsync(String url, Object? body, IChatRequest? chatRequest, AiClientOptions options, CancellationToken cancellationToken = default)
+    {
+        var retry = options.RetryCount;
+        for (var i = 0; ; i++)
+        {
+            try
+            {
+                return await PostOnceStreamAsync(url, body, chatRequest, options, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ShouldRetry(ex, i, retry, cancellationToken))
+            {
+                var delay = GetRetryDelay(options, i);
+                Log.Warn("[{0}] 流式请求失败，第 {1} 次重试（共 {2} 次），等待 {3}ms: {4}", Name, i + 1, retry, delay, ex.Message);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>发送单次 POST 流式请求</summary>
+    private async Task<HttpResponseMessage> PostOnceStreamAsync(String url, Object? body, IChatRequest? chatRequest, AiClientOptions options, CancellationToken cancellationToken)
     {
         var bodyStr = body is String s ? s : JsonHost.Write(body!, JsonOptions!) ?? "";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
@@ -343,8 +623,9 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (errBody.IsNullOrEmpty()) errBody = resp.ReasonPhrase;
             resp.Dispose();
-            throw new ApiException((Int32)resp.StatusCode, errBody);
+            throw CreateApiException((Int32)resp.StatusCode, errBody);
             //throw new HttpRequestException($"AI 服务商[{Name}]返回错误 {(Int32)resp.StatusCode}: {errBody}");
         }
         return resp;
@@ -365,12 +646,12 @@ public abstract class AiClientBase : IChatClient, ILogFeature, ITracerFeature
             Content = new StringContent(bodyStr, Encoding.UTF8, "application/json"),
         };
         SetHeaders(req, chatRequest, options);
-        var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
+        using var resp = await HttpClient.SendAsync(req, cancellationToken).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-            throw new ApiException((Int32)resp.StatusCode, errBody);
-            //throw new HttpRequestException($"AI 服务商[{Name}]返回错误 {(Int32)resp.StatusCode}: {errBody}");
+            if (errBody.IsNullOrEmpty()) errBody = resp.ReasonPhrase;
+            throw CreateApiException((Int32)resp.StatusCode, errBody);
         }
         return await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
     }

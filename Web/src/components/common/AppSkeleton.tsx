@@ -2,15 +2,15 @@ import { cn } from '@/lib/utils'
 
 function Bone({ className }: { className?: string }) {
   return (
-    <div className={cn('bg-gray-200 dark:bg-gray-700 rounded animate-pulse', className)} />
+    <div className={cn('shimmer rounded', className)} />
   )
 }
 
 export function AppSkeleton() {
   return (
-    <div className="flex h-screen w-screen bg-white dark:bg-[#1a1a1c]">
+    <div className="flex h-screen w-screen bg-[var(--color-surface-0)]">
       {/* Sidebar skeleton */}
-      <div className="w-64 border-r border-gray-100 dark:border-gray-800 flex flex-col p-4 gap-4 shrink-0">
+      <div className="w-64 border-r border-[var(--color-border-subtle)] flex flex-col p-4 gap-4 shrink-0">
         <Bone className="h-10 w-full rounded-lg" />
         <div className="flex flex-col gap-2 mt-4">
           <Bone className="h-8 w-full" />

@@ -6,7 +6,7 @@ using XCode.Membership;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>模型配置。后端接入的大语言模型，关联到具体的提供商实例</summary>
-[Menu(110, false, Icon = "fa-table", LastUpdate = "2026-4-6")]
+[Menu(9898, false, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class ModelConfigController : EntityController<ModelConfig>
 {
@@ -14,7 +14,7 @@ public class ModelConfigController : EntityController<ModelConfig>
     {
         //LogOnChange = true;
 
-        ListFields.RemoveField("UpstreamModel", "PriceTiers", "RoleIds", "DepartmentIds", "RoleNames", "DepartmentNames", "ModelTime");
+        ListFields.RemoveField("Code", "MaxOutputTokens", "UpstreamModel", "ReasoningEfforts", "PriceTiers", "RoleIds", "DepartmentIds", "RoleNames", "DepartmentNames", "ModelTime", "Locked");
         ListFields.RemoveCreateField().RemoveRemarkField();
 
         {

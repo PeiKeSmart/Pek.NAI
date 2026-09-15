@@ -1,4 +1,4 @@
-namespace NewLife.ChatAI.Models;
+﻿namespace NewLife.ChatAI.Models;
 
 /// <summary>系统设置 DTO（读取）。包含 ChatSetting 开源版可配置项，供前端系统设置页展示和编辑</summary>
 public class SystemSettingsDto
@@ -13,11 +13,29 @@ public class SystemSettingsDto
     /// <summary>Logo地址。欢迎页自定义Logo图片URL，为空时显示默认图标</summary>
     public String LogoUrl { get; set; } = "";
 
+    /// <summary>全局系统指令。注入每一个用户的每一次对话，置于模型指令之后作为兜底行为准则</summary>
+    public String SystemInstruction { get; set; } = "";
+
     /// <summary>欢迎语。欢迎页大标题，为空时前端使用默认文案</summary>
     public String WelcomeMessage { get; set; } = "";
 
+    /// <summary>欢迎副标题。欢迎页大标题下方的引导文案，为空时前端使用默认文案</summary>
+    public String WelcomeSubtitle { get; set; } = "";
+
+    /// <summary>客服文本。侧边栏或悬浮球中显示的帮助链接文字，为空时不展示</summary>
+    public String SupportText { get; set; } = "";
+
+    /// <summary>客服链接。点击客服文本跳转的 URL</summary>
+    public String SupportUrl { get; set; } = "";
+
+    /// <summary>客服入口位置。不显示/侧边栏底部/新对话按钮下方/右下角悬浮球</summary>
+    public SupportPosition SupportPosition { get; set; }
+
     /// <summary>自动生成标题。首条消息后是否自动生成会话标题</summary>
     public Boolean AutoGenerateTitle { get; set; }
+
+    /// <summary>错误引导文案。对话生成出错时在错误信息下方显示的引导内容，为空时不追加</summary>
+    public String ErrorGuidance { get; set; } = "";
     #endregion
 
     #region 对话默认
@@ -25,18 +43,21 @@ public class SystemSettingsDto
     public Int32 DefaultModel { get; set; }
 
     /// <summary>默认思考模式</summary>
-    public Int32 DefaultThinkingMode { get; set; }
+    public ThinkingMode DefaultThinkingMode { get; set; }
 
-    /// <summary>上下文轮数。默认10</summary>
+    /// <summary>上下文轮数。默认20</summary>
     public Int32 DefaultContextRounds { get; set; }
+
+    /// <summary>用户隔离。启用后向LLM服务商透传User字段，用于服务商侧KVCache隔离</summary>
+    public Boolean EnableUserIsolation { get; set; }
+
+    /// <summary>重排序模型编码。CrossEncoder 二次精排场景使用，为空时跳过重排</summary>
+    public String RerankModel { get; set; } = "";
     #endregion
 
     #region 上传与分享
     /// <summary>最大附件大小（MB）</summary>
     public Int32 MaxAttachmentSize { get; set; }
-
-    /// <summary>单次最多上传附件数</summary>
-    public Int32 MaxAttachmentCount { get; set; }
 
     /// <summary>允许的文件扩展名</summary>
     public String AllowedExtensions { get; set; } = "";
@@ -45,7 +66,10 @@ public class SystemSettingsDto
     public String DefaultImageSize { get; set; } = "";
 
     /// <summary>分享有效期（天），0=永不过期</summary>
-    public Int32 ShareExpireDays { get; set; }
+    public Int32 ShareExpireMinutes { get; set; }
+
+        /// <summary>允许匿名访问分享</summary>
+    public Boolean AllowAnonymousShare { get; set; }
     #endregion
 
     #region API 网关
@@ -55,11 +79,8 @@ public class SystemSettingsDto
     /// <summary>网关限流（每分钟每用户）</summary>
     public Int32 GatewayRateLimit { get; set; }
 
-    /// <summary>上游重试次数</summary>
-    public Int32 UpstreamRetryCount { get; set; }
-
-    /// <summary>网关对话记录</summary>
-    public Boolean EnableGatewayRecording { get; set; }
+    /// <summary>网关领域模式。关闭=纯净转发；开启=领域智能体（完整链+记录）</summary>
+    public Boolean EnableGatewayDomainMode { get; set; }
     #endregion
 
     #region 工具与能力
@@ -69,14 +90,20 @@ public class SystemSettingsDto
     /// <summary>启用 MCP 工具调用</summary>
     public Boolean EnableMcp { get; set; }
 
-    /// <summary>推荐问题缓存</summary>
-    public Boolean EnableSuggestedQuestionCache { get; set; }
+    /// <summary>工具仓位上限</summary>
+    public Int32 ToolSlotLimit { get; set; }
 
-    /// <summary>流式输出速度（1~5）</summary>
-    public Int32 StreamingSpeed { get; set; }
+    /// <summary>工具结果最大字符数</summary>
+    public Int32 ToolResultMaxChars { get; set; }
 
-    /// <summary>工具渐进式发现阈值</summary>
-    public Int32 ToolAdvertiseThreshold { get; set; }
+    /// <summary>工具调用最大轮次</summary>
+    public Int32 ToolMaxIterations { get; set; }
+
+    /// <summary>技能内容最大字符数</summary>
+    public Int32 SkillBudgetChars { get; set; }
+
+    /// <summary>SQL查询允许的非查询操作。逗号分隔，默认允许 INSERT 和 UPDATE；SELECT/WITH 始终允许</summary>
+    public String QuerySqlAllowedOperations { get; set; } = "";
     #endregion
 
     #region 功能开关
@@ -94,8 +121,11 @@ public class SystemSettingsDto
     /// <summary>启用自动学习</summary>
     public Boolean EnableAutoLearning { get; set; }
 
-    /// <summary>学习分析模型</summary>
-    public String LearningModel { get; set; } = "";
+    /// <summary>轻量模型编码</summary>
+    public String LightweightModel { get; set; } = "";
+
+    /// <summary>嵌入模型编码</summary>
+    public String EmbedModel { get; set; } = "";
 
     /// <summary>学习最低字数</summary>
     public Int32 MinLearningContentLength { get; set; }
@@ -118,11 +148,29 @@ public class SystemSettingsUpdateDto
     /// <summary>Logo地址</summary>
     public String? LogoUrl { get; set; }
 
+    /// <summary>全局系统指令</summary>
+    public String? SystemInstruction { get; set; }
+
     /// <summary>欢迎语</summary>
     public String? WelcomeMessage { get; set; }
 
+    /// <summary>欢迎副标题</summary>
+    public String? WelcomeSubtitle { get; set; }
+
+    /// <summary>客服文本</summary>
+    public String? SupportText { get; set; }
+
+    /// <summary>客服链接</summary>
+    public String? SupportUrl { get; set; }
+
+    /// <summary>客服入口位置。不显示/侧边栏底部/新对话按钮下方/右下角悬浮球</summary>
+    public SupportPosition? SupportPosition { get; set; }
+
     /// <summary>自动生成标题</summary>
     public Boolean? AutoGenerateTitle { get; set; }
+
+    /// <summary>错误引导文案。对话生成出错时在错误信息下方显示的引导内容，为空时不追加</summary>
+    public String? ErrorGuidance { get; set; }
     #endregion
 
     #region 对话默认
@@ -130,18 +178,21 @@ public class SystemSettingsUpdateDto
     public Int32? DefaultModel { get; set; }
 
     /// <summary>默认思考模式</summary>
-    public Int32? DefaultThinkingMode { get; set; }
+    public ThinkingMode? DefaultThinkingMode { get; set; }
 
     /// <summary>上下文轮数</summary>
     public Int32? DefaultContextRounds { get; set; }
+
+    /// <summary>用户隔离。启用后向LLM服务商透传User字段，用于服务商侧KVCache隔离</summary>
+    public Boolean? EnableUserIsolation { get; set; }
+
+    /// <summary>重排序模型编码。CrossEncoder 二次精排场景使用，为空时跳过重排</summary>
+    public String? RerankModel { get; set; }
     #endregion
 
     #region 上传与分享
     /// <summary>最大附件大小（MB）</summary>
     public Int32? MaxAttachmentSize { get; set; }
-
-    /// <summary>单次最多上传附件数</summary>
-    public Int32? MaxAttachmentCount { get; set; }
 
     /// <summary>允许的文件扩展名</summary>
     public String? AllowedExtensions { get; set; }
@@ -150,7 +201,10 @@ public class SystemSettingsUpdateDto
     public String? DefaultImageSize { get; set; }
 
     /// <summary>分享有效期（天）</summary>
-    public Int32? ShareExpireDays { get; set; }
+    public Int32? ShareExpireMinutes { get; set; }
+
+    /// <summary>允许匿名访问分享</summary>
+    public Boolean? AllowAnonymousShare { get; set; }
     #endregion
 
     #region API 网关
@@ -160,11 +214,8 @@ public class SystemSettingsUpdateDto
     /// <summary>网关限流</summary>
     public Int32? GatewayRateLimit { get; set; }
 
-    /// <summary>上游重试次数</summary>
-    public Int32? UpstreamRetryCount { get; set; }
-
-    /// <summary>网关对话记录</summary>
-    public Boolean? EnableGatewayRecording { get; set; }
+    /// <summary>网关领域模式。关闭=纯净转发；开启=领域智能体（完整链+记录）</summary>
+    public Boolean? EnableGatewayDomainMode { get; set; }
     #endregion
 
     #region 工具与能力
@@ -174,14 +225,20 @@ public class SystemSettingsUpdateDto
     /// <summary>启用 MCP 工具调用</summary>
     public Boolean? EnableMcp { get; set; }
 
-    /// <summary>推荐问题缓存</summary>
-    public Boolean? EnableSuggestedQuestionCache { get; set; }
+    /// <summary>工具仓位上限</summary>
+    public Int32? ToolSlotLimit { get; set; }
 
-    /// <summary>流式输出速度（1~5）</summary>
-    public Int32? StreamingSpeed { get; set; }
+    /// <summary>工具结果最大字符数</summary>
+    public Int32? ToolResultMaxChars { get; set; }
 
-    /// <summary>工具渐进式发现阈值</summary>
-    public Int32? ToolAdvertiseThreshold { get; set; }
+    /// <summary>工具调用最大轮次</summary>
+    public Int32? ToolMaxIterations { get; set; }
+
+    /// <summary>技能内容最大字符数</summary>
+    public Int32? SkillBudgetChars { get; set; }
+
+    /// <summary>SQL查询允许的非查询操作。逗号分隔，默认允许 INSERT 和 UPDATE；SELECT/WITH 始终允许</summary>
+    public String? QuerySqlAllowedOperations { get; set; }
     #endregion
 
     #region 功能开关
@@ -199,8 +256,11 @@ public class SystemSettingsUpdateDto
     /// <summary>启用自动学习</summary>
     public Boolean? EnableAutoLearning { get; set; }
 
-    /// <summary>学习分析模型</summary>
-    public String? LearningModel { get; set; }
+    /// <summary>轻量模型编码</summary>
+    public String? LightweightModel { get; set; }
+
+    /// <summary>嵌入模型编码</summary>
+    public String? EmbedModel { get; set; }
 
     /// <summary>学习最低字数</summary>
     public Int32? MinLearningContentLength { get; set; }
@@ -210,4 +270,5 @@ public class SystemSettingsUpdateDto
 /// <summary>模型选项。用于系统设置页默认模型下拉列表</summary>
 /// <param name="Id">模型配置Id</param>
 /// <param name="Name">显示名称</param>
-public record ModelOptionDto(Int32 Id, String Name);
+/// <param name="IsChatModel">是否为对话模型（可出现在 /chat 首页选择器中）</param>
+public record ModelOptionDto(Int32 Id, String Name, Boolean IsChatModel = false);

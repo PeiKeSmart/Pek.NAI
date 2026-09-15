@@ -10,31 +10,7 @@ import {
 } from '@/lib/api'
 import type { ProviderItem, ModelManageItem } from '@/types'
 import { showToast } from '@/stores/toastStore'
-
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  disabled?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-50 ${checked ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-600'}`}
-    >
-      <span
-        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`}
-      />
-    </button>
-  )
-}
+import { Toggle } from '@/components/atoms/Toggle'
 
 // ── API Key Dialog ──
 
@@ -131,8 +107,10 @@ function ModelEditDialog({ model, onClose, onSaved }: ModelEditDialogProps) {
     supportFunction: model.supportFunction,
     supportVision: model.supportVision,
     supportAudio: model.supportAudio,
+    supportSpeech: model.supportSpeech,
     supportImage: model.supportImage,
     supportVideo: model.supportVideo,
+    locked: model.locked ?? false,
   })
   const [saving, setSaving] = useState(false)
 
@@ -158,6 +136,7 @@ function ModelEditDialog({ model, onClose, onSaved }: ModelEditDialogProps) {
     ['supportFunction', 'providers.modelEdit.functionCalling'],
     ['supportVision', 'providers.modelEdit.vision'],
     ['supportAudio', 'providers.modelEdit.audio'],
+    ['supportSpeech', 'providers.modelEdit.speech'],
     ['supportImage', 'providers.modelEdit.imageGeneration'],
     ['supportVideo', 'providers.modelEdit.videoGeneration'],
   ] as const
@@ -170,12 +149,22 @@ function ModelEditDialog({ model, onClose, onSaved }: ModelEditDialogProps) {
         </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 font-mono">{model.name}</p>
 
-        {/* Enable */}
+        {/* Enable + Locked */}
         <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-800 mb-3">
-          <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
-            {t('providers.modelEdit.enable')}
-          </span>
-          <Toggle checked={form.enable} onChange={(v) => setField('enable', v)} />
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <Toggle size="sm" checked={form.enable} onChange={(v) => setField('enable', v)} />
+              <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                {t('providers.modelEdit.enable')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Toggle size="sm" checked={form.locked} onChange={(v) => setField('locked', v)} />
+              <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                {t('providers.modelEdit.locked')}
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* Context Length */}
@@ -197,20 +186,15 @@ function ModelEditDialog({ model, onClose, onSaved }: ModelEditDialogProps) {
           <div className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-2">
             {t('providers.modelEdit.features')}
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {featureKeys.map(([key, labelKey]) => (
-              <label
+              <div
                 key={key}
-                className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none"
+                className="flex items-center gap-2"
               >
-                <input
-                  type="checkbox"
-                  checked={form[key]}
-                  onChange={(e) => setField(key, e.target.checked)}
-                  className="rounded border-gray-300 text-primary focus:ring-primary/40"
-                />
-                {t(labelKey)}
-              </label>
+                <Toggle size="sm" checked={form[key]} onChange={(v) => setField(key, v)} />
+                <span className="text-sm text-gray-700 dark:text-gray-300">{t(labelKey)}</span>
+              </div>
             ))}
           </div>
         </div>
@@ -335,7 +319,7 @@ export function ProvidersSettings() {
                     {provider.protocol}
                   </span>
                 </div>
-                <Toggle checked={provider.enable} onChange={(v) => { void handleToggleProvider({ ...provider, enable: !v }) }} />
+                <Toggle size="sm" checked={provider.enable} onChange={(v) => { void handleToggleProvider({ ...provider, enable: !v }) }} />
               </div>
               {provider.endpoint && (
                 <p className="text-xs text-gray-400 dark:text-gray-500 truncate mb-2">{provider.endpoint}</p>
@@ -402,41 +386,46 @@ export function ProvidersSettings() {
                       <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">{model.code}</div>
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         {model.supportThinking && (
                           <span title={t('providers.modelEdit.thinking')} className="text-purple-500">
-                            <Icon name="psychology" size="xs" />
+                            <Icon name="psychology" size="base" />
                           </span>
                         )}
                         {model.supportFunction && (
                           <span title={t('providers.modelEdit.functionCalling')} className="text-blue-500">
-                            <Icon name="build" size="xs" />
+                            <Icon name="build" size="base" />
                           </span>
                         )}
                         {model.supportVision && (
                           <span title={t('providers.modelEdit.vision')} className="text-green-500">
-                            <Icon name="image" size="xs" />
+                            <Icon name="image" size="base" />
                           </span>
                         )}
                         {model.supportAudio && (
                           <span title={t('providers.modelEdit.audio')} className="text-orange-500">
-                            <Icon name="volume_up" size="xs" />
+                            <Icon name="volume_up" size="base" />
+                          </span>
+                        )}
+                        {model.supportSpeech && (
+                          <span title={t('providers.modelEdit.speech')} className="text-indigo-500">
+                            <Icon name="record_voice_over" size="base" />
                           </span>
                         )}
                         {model.supportImage && (
                           <span title={t('providers.modelEdit.imageGeneration')} className="text-pink-500">
-                            <Icon name="brush" size="xs" />
+                            <Icon name="brush" size="base" />
                           </span>
                         )}
                         {model.supportVideo && (
                           <span title={t('providers.modelEdit.videoGeneration')} className="text-red-500">
-                            <Icon name="videocam" size="xs" />
+                            <Icon name="videocam" size="base" />
                           </span>
                         )}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-center">
-                      <Toggle checked={model.enable} onChange={() => handleToggleModel(model)} />
+                      <Toggle size="sm" checked={model.enable} onChange={() => handleToggleModel(model)} />
                     </td>
                     <td className="px-3 py-2 text-right">
                       <button

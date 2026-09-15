@@ -46,9 +46,11 @@ public class ToolSyncEngineTests
         public String? Description { get; set; }
         public String? Parameters { get; set; }
         public String? Triggers { get; set; }
+        public String? AssistantTriggers { get; set; }
         public Boolean Enable { get; set; }
         public Boolean IsSystem { get; set; }
         public Boolean IsLocked { get; set; }
+        // ToolResponseRouting 已移除，路由由 IToolResult.Contents.Audience 替代
         public String? Providers { get; set; }
         public String? Endpoint { get; set; }
         public String? ApiKey { get; set; }

@@ -1,10 +1,10 @@
 ﻿using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Models;
 using NewLife.Collections;
-using NewLife.Remoting;
 using NewLife.Serialization;
 
 namespace NewLife.AI.Clients.DashScope;
@@ -26,24 +26,54 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     /// <inheritdoc/>
     public override String Name { get; set; } = "阿里百炼";
 
-    /// <summary>原生 DashScope API 基础地址（/api/v1）</summary>
-    protected virtual String NativeEndpoint => "https://dashscope.aliyuncs.com/api/v1";
+    /// <summary>原生 API 路径前缀（/api/v1）</summary>
+    protected virtual String NativePath => "/api/v1";
 
-    /// <summary>兼容模式基础地址。Embedding、重排序等沿用此端点</summary>
-    protected virtual String CompatibleEndpoint => "https://dashscope.aliyuncs.com/compatible-mode";
+    /// <summary>兼容模式 API 路径前缀（/compatible-mode）。Embedding、重排序等沿用此路径</summary>
+    protected virtual String CompatiblePath => "/compatible-mode";
+
+    /// <summary>从配置地址中提取 scheme+host，用于构建完整 API 地址</summary>
+    /// <remarks>
+    /// 优先使用显式配置的 Endpoint；未配置时，若已设置 Organization（百炼业务空间 ID），
+    /// 使用 MaaS 专属域名 https://{Organization}.cn-beijing.maas.aliyuncs.com；
+    /// 否则回退到公共域名 https://dashscope.aliyuncs.com。
+    /// Qwen-TTS 系列模型必须使用 MaaS 专属域名才能正常调用。
+    /// </remarks>
+    private String GetHost()
+    {
+        var endpoint = _options.Endpoint;
+        if (!endpoint.IsNullOrWhiteSpace() && Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+            return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+
+        // 已配置业务空间 ID 时使用 MaaS 专属域名（Qwen-TTS 必须，CosyVoice 亦适用）
+        if (!_options.Organization.IsNullOrEmpty())
+            return $"https://{_options.Organization}.cn-beijing.maas.aliyuncs.com";
+
+        return "https://dashscope.aliyuncs.com";
+    }
+
+    /// <summary>获取原生协议完整基础地址</summary>
+    private String GetNativeBaseUrl() => GetHost() + NativePath;
+
+    /// <summary>获取兼容模式完整基础地址</summary>
+    private String GetCompatibleBaseUrl() => GetHost() + CompatiblePath;
+
+    /// <summary>外部显式设置的端点覆盖值。为空时按协议模式动态计算（A-73）</summary>
+    private String? _defaultEndpointOverride;
 
     /// <inheritdoc/>
     public override String DefaultEndpoint
     {
-        get => IsNativeProtocol ? NativeEndpoint : CompatibleEndpoint;
-        set => base.DefaultEndpoint = value;
+        // 外部 setter 显式设置的值优先；否则按协议模式动态计算（原生 /api/v1，兼容 /compatible-mode）
+        get => _defaultEndpointOverride ?? (IsNativeProtocol ? GetNativeBaseUrl() : GetCompatibleBaseUrl());
+        set => _defaultEndpointOverride = value;
     }
 
     /// <summary>是否使用 DashScope 原生协议。Protocol 为空或 "DashScope" 时为原生模式</summary>
     protected Boolean IsNativeProtocol => _options.Protocol.IsNullOrEmpty() || _options.Protocol == "DashScope";
 
     /// <summary>默认Json序列化选项</summary>
-    public static JsonOptions DashScopeDefaultJsonOptions = new()
+    public static readonly JsonOptions DashScopeDefaultJsonOptions = new()
     {
         PropertyNaming = PropertyNaming.SnakeCaseLower,
         IgnoreNullValues = true,
@@ -84,19 +114,21 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     /// <returns>可直接序列化的请求字典</returns>
     protected override Object BuildRequest(IChatRequest request)
     {
-        AutoDetectSearchIntent(request);
+        var intent = DetectSearchIntent(request);
         var dic = ChatCompletionRequest.BuildBody(request);
-        AppendDashScopeFields(dic, request);
+        AppendDashScopeFields(dic, request, intent);
         return dic;
     }
 
     /// <summary>注入 DashScope 兼容模式专属字段：联网搜索、图文混合输出、web_extractor / code_interpreter 内置工具</summary>
     /// <param name="dic">已构建的请求字典</param>
     /// <param name="request">统一请求</param>
-    private static void AppendDashScopeFields(IDictionary<String, Object> dic, IChatRequest request)
+    /// <param name="intent">联网意图检测结果（本次请求局部，显式设置优先）</param>
+    private static void AppendDashScopeFields(IDictionary<String, Object> dic, IChatRequest request, DashScopeSearchIntent intent)
     {
         // ===== 联网搜索 =====
         var enableSearch = request["EnableSearch"];
+        if (enableSearch == null && intent.EnableSearch) enableSearch = true;
         if (enableSearch != null && enableSearch.ToBoolean())
         {
             dic["enable_search"] = true;
@@ -104,6 +136,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
             var strategy = request["SearchStrategy"] as String;
             var forcedSearch = request["ForcedSearch"];
             var enableSource = request["EnableSource"];
+            if (enableSource == null && intent.EnableSource) enableSource = true;
             var enableSearchExt = request["EnableSearchExtension"];
             if (!strategy.IsNullOrEmpty()) searchOpts["search_strategy"] = strategy!;
             if (forcedSearch != null && forcedSearch.ToBoolean()) searchOpts["forced_search"] = true;
@@ -120,6 +153,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
         // ===== 内置工具：web_search / web_extractor / code_interpreter =====
         // 与 Function Calling 不同：内置工具只有 {"type":"xxx"}，不含 "function" 子对象，插入至 tools 数组头部
         var enableWebExtractor = request["EnableWebExtractor"];
+        if (enableWebExtractor == null && intent.EnableWebExtractor) enableWebExtractor = true;
         var enableCodeInterp = request["EnableCodeInterpreter"];
         if ((enableWebExtractor != null && enableWebExtractor.ToBoolean()) ||
             (enableCodeInterp != null && enableCodeInterp.ToBoolean()))
@@ -159,47 +193,66 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
         "fetch", "crawl", "scrape",
     ];
 
+    /// <summary>联网搜索意图检测结果。仅本次请求有效（返回值传递），不写入共享 Items，避免跨请求污染</summary>
+    /// <param name="EnableSearch">启用联网搜索</param>
+    /// <param name="EnableWebExtractor">启用网页爬取（隐含联网搜索）</param>
+    /// <param name="EnableSource">附带搜索来源</param>
+    private readonly record struct DashScopeSearchIntent(Boolean EnableSearch, Boolean EnableWebExtractor, Boolean EnableSource);
+
     /// <summary>自动推断联网意图。仅当外部未显式设置 EnableSearch / EnableWebExtractor 时，
-    /// 从最后一条用户消息中检测 URL 或关键词，自动激活对应的 DashScope 能力。</summary>
-    /// <param name="request">统一请求，结果写回 request["EnableSearch"] / request["EnableWebExtractor"]</param>
-    private static void AutoDetectSearchIntent(IChatRequest request)
+    /// 从最后一条用户消息中检测 URL 或关键词，返回本次请求的 DashScope 能力开关。</summary>
+    /// <remarks>
+    /// 检测结果以返回值传递，仅作用于本次请求构建，不写入 request.Items——
+    /// Items 与调用方 options 按引用共享（A-53 设计），写入会造成跨请求永久污染，
+    /// 后续请求将静默强制联网搜索（行为 + 费用影响）。
+    /// </remarks>
+    /// <param name="request">统一请求</param>
+    /// <returns>本次请求的联网搜索/爬取开关，未触发检测时全 false</returns>
+    private static DashScopeSearchIntent DetectSearchIntent(IChatRequest request)
     {
         // 已显式设置则尊重调用方决定，不覆盖
-        if (request["EnableSearch"] != null || request["EnableWebExtractor"] != null) return;
+        if (request["EnableSearch"] != null || request["EnableWebExtractor"] != null) return default;
 
         // 取最后一条 user 消息文本
         var lastMsg = request.Messages?.LastOrDefault(m =>
             String.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content as String;
-        if (lastMsg.IsNullOrEmpty()) return;
+        if (lastMsg.IsNullOrEmpty()) return default;
 
         // 检测 URL（以 http:// 或 https:// 开头的片段）→ 触发 web_extractor
         if (lastMsg.Contains("http://", StringComparison.OrdinalIgnoreCase) ||
             lastMsg.Contains("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            request["EnableWebExtractor"] = true;
-            return;
-        }
+            return new DashScopeSearchIntent(false, true, false);
 
         // 检测爬取类关键词 → 触发 web_extractor
         foreach (var kw in _extractKeywords)
         {
             if (lastMsg.Contains(kw, StringComparison.OrdinalIgnoreCase))
-            {
-                request["EnableWebExtractor"] = true;
-                return;
-            }
+                return new DashScopeSearchIntent(false, true, false);
         }
 
         // 检测搜索类关键词 → 触发 enable_search + enable_source
         foreach (var kw in _searchKeywords)
         {
             if (lastMsg.Contains(kw, StringComparison.OrdinalIgnoreCase))
-            {
-                request["EnableSearch"] = true;
-                request["EnableSource"] = true;
-                return;
-            }
+                return new DashScopeSearchIntent(true, false, true);
         }
+
+        return default;
+    }
+
+    /// <summary>将检测到的联网意图应用到 DashScope 原生协议请求。仅回填检测开关，不覆盖调用方显式设置</summary>
+    /// <param name="body">已构建的 DashScope 原生协议请求</param>
+    /// <param name="intent">联网意图检测结果（本次请求局部）</param>
+    private static void ApplyDetectedIntent(DashScopeRequest body, DashScopeSearchIntent intent)
+    {
+        if (intent.EnableSearch)
+            body.Parameters.EnableSearch = true;
+        if (intent.EnableSource)
+        {
+            body.Parameters.SearchOptions ??= new Dictionary<String, Object>();
+            body.Parameters.SearchOptions["enable_source"] = true;
+        }
+        // EnableWebExtractor 仅兼容模式使用（AppendDashScopeFields 注入内置工具），原生协议由内置工具参数承载
     }
 
     /// <summary>构建 Omni 兼容模式请求体。在标准 OpenAI 请求体基础上注入 modalities、audio 等 Omni 专属字段</summary>
@@ -207,9 +260,9 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     /// <returns>可直接序列化的请求字典</returns>
     private IDictionary<String, Object> BuildOmniBody(IChatRequest request)
     {
-        AutoDetectSearchIntent(request);
+        var intent = DetectSearchIntent(request);
         var dic = ChatCompletionRequest.BuildBody(request);
-        AppendDashScopeFields(dic, request);
+        AppendDashScopeFields(dic, request, intent);
 
         // Omni 模型 API 强制要求 stream=true
         dic["stream"] = true;
@@ -239,7 +292,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     private async IAsyncEnumerable<IChatResponse> ChatThirdPartyStreamAsync(IChatRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var body = ChatCompletionRequest.BuildBody(request);
-        var url = CombineApiUrl(CompatibleEndpoint, "/v1/chat/completions");
+        var url = CombineApiUrl(GetCompatibleBaseUrl(), "/v1/chat/completions");
 
         using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -251,14 +304,19 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
 
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
-            if (!line.StartsWith("data:")) continue;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
             var data = line.Substring(5).Trim();
-            if (data.Length == 0 || data == "[DONE]") continue;
+            if (data == "[DONE]") break;
+            if (data.Length == 0) continue;
+
+            // 流式错误识别（OpenAI 兼容格式），避免静默吞掉
+            EnsureNoStreamError(data, Name);
 
             IChatResponse? chunk = null;
             // base.ParseChunk 调用 AiClientBase.ParseChunk → ParseResponse（OpenAI 格式），不走 DashScope 原生解析
-            try { chunk = base.ParseChunk(data, request, null); } catch { }
+            try { chunk = base.ParseChunk(data, request, null); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
 
             if (chunk != null)
             {
@@ -273,7 +331,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     {
         request.Stream = true;
         var body = BuildOmniBody(request);
-        var url = CombineApiUrl(CompatibleEndpoint, "/v1/chat/completions");
+        var url = CombineApiUrl(GetCompatibleBaseUrl(), "/v1/chat/completions");
 
         using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -285,13 +343,18 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
 
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
-            if (!line.StartsWith("data:")) continue;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
             var data = line.Substring(5).Trim();
-            if (data.Length == 0 || data == "[DONE]") continue;
+            if (data == "[DONE]") break;
+            if (data.Length == 0) continue;
+
+            // 流式错误识别（OpenAI 兼容格式），避免静默吞掉
+            EnsureNoStreamError(data, Name);
 
             IChatResponse? chunk = null;
-            try { chunk = base.ParseChunk(data, request, null); } catch { }
+            try { chunk = base.ParseChunk(data, request, null); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
 
             if (chunk != null)
             {
@@ -328,7 +391,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
             Object = "chat.completion",
             Id = last?.Id,
             Model = last?.Model ?? request.Model,
-            Created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Created = DateTimeOffset.UtcNow.ToLong(),
             Choices =
             [
                 new CompletionChoice
@@ -352,7 +415,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
         // 第三方托管模型（GLM/Kimi/MiniMax 等）不支持 DashScope 原生端点，强制走兼容模式
         if (IsNativeProtocol && IsThirdPartyModel(request.Model ?? _options.Model))
         {
-            var compatUrl = CombineApiUrl(CompatibleEndpoint, "/v1/chat/completions");
+            var compatUrl = CombineApiUrl(GetCompatibleBaseUrl(), "/v1/chat/completions");
             var compatBody = ChatCompletionRequest.BuildBody(request);
             var compatJson = await PostAsync(compatUrl, compatBody, request, _options, cancellationToken).ConfigureAwait(false);
             return ParseResponse(compatJson, request);
@@ -363,15 +426,16 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
 
         var model = request.Model ?? _options.Model;
         var url = BuildUrl(request);
-        AutoDetectSearchIntent(request);
+        var intent = DetectSearchIntent(request);
         var body = DashScopeRequest.FromChatRequest(request, IsMultimodalModel(request.Model));
+        ApplyDetectedIntent(body, intent);
         var json = await PostAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         var dashResp = json.ToJsonEntity<DashScopeResponse>(JsonOptions)!;
         if (!dashResp.Code.IsNullOrEmpty())
             throw new HttpRequestException($"[DashScope] 错误 {dashResp.Code}: {dashResp.Message}");
 
-        // 原生响应无顶层 model 字段，从请求回填
-        dashResp.Model = model;
+        // 原生响应无顶层 model 字段，从请求回填（服务端若返回则保留，避免计费归属失真）
+        dashResp.Model ??= model;
         if (dashResp is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion";
 
         return dashResp;
@@ -404,8 +468,9 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
         }
 
         var url = BuildUrl(request);
-        AutoDetectSearchIntent(request);
+        var intent = DetectSearchIntent(request);
         var body = DashScopeRequest.FromChatRequest(request, IsMultimodalModel(request.Model));
+        ApplyDetectedIntent(body, intent);
 
         using var httpResponse = await PostStreamAsync(url, body, request, _options, cancellationToken).ConfigureAwait(false);
         using var stream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -441,7 +506,8 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
             }
 
             IChatResponse? chunk = null;
-            try { chunk = ParseChunk(data, request, null); } catch { }
+            try { chunk = ParseChunk(data, request, null); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
 
             if (chunk != null)
             {
@@ -471,7 +537,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
         var endpoint = _options.Endpoint;
         if (endpoint.IsNullOrWhiteSpace() ||
             endpoint.IndexOf("compatible-mode", StringComparison.OrdinalIgnoreCase) >= 0)
-            endpoint = NativeEndpoint;
+            endpoint = GetNativeBaseUrl();
         return endpoint.TrimEnd('/') + path;
     }
 
@@ -488,19 +554,32 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     /// <remarks>
     /// 命名规律：
     /// <list type="bullet">
-    /// <item>含 -vl：Vision-Language 系列</item>
-    /// <item>qvq- 前缀：视觉推理系列（区别于纯文本推理 qwq-）</item>
-    /// <item>qwen3.X- 前缀（如 qwen3.5-/qwen3.6-）：内置多模态能力，仅支持 multimodal-generation 端点</item>
+    /// <item>含 -vl / -ocr：Vision-Language 系列，走多模态端点</item>
+    /// <item>qvq- 前缀：视觉推理系列（区别于纯文本推理 qwq-），走多模态端点</item>
+    /// <item>qwen3.5/3.6/3.7 -plus/-flash/-turbo：支持文本+视觉，走多模态端点</item>
+    /// <item>qwen3.5/3.6/3.7 -max（含 -max-preview）：纯文本旗舰，走 text-generation 端点</item>
+    /// <item>音频理解模型（qwen-audio-*、qwen2-audio-*）：走多模态端点</item>
     /// </list>
     /// </remarks>
     private static Boolean IsMultimodalModel(String? model)
     {
-        if (String.IsNullOrEmpty(model)) return false;
+        if (model.IsNullOrEmpty()) return false;
         // Omni 全模态模型不走原生多模态端点，走兼容模式
         if (IsOmniModel(model)) return false;
+        // -vl / -ocr 标识符（视觉语言/OCR）
         if (model.IndexOf("-vl", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        if (model.IndexOf("-ocr", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+        // qvq- 前缀：视觉推理系列
         if (model.StartsWith("qvq-", StringComparison.OrdinalIgnoreCase)) return true;
-        if (model.StartsWithIgnoreCase("qwen3.5-", "qwen3.")) return true;
+        // qwen3.5/3.6/3.7：-plus/-flash/-turbo 含视觉能力，走多模态端点；-max（含 -max-preview）为纯文本
+        if (Regex.IsMatch(model, @"^qwen\d+\.\d+-", RegexOptions.IgnoreCase))
+        {
+            if (model.Contains("-plus", StringComparison.OrdinalIgnoreCase) ||
+                model.Contains("-flash", StringComparison.OrdinalIgnoreCase) ||
+                model.Contains("-turbo", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return false;
+        }
         // 音频理解模型（qwen-audio-chat、qwen2-audio-instruct 等）使用多模态端点
         if (model.StartsWith("qwen-audio", StringComparison.OrdinalIgnoreCase)) return true;
         if (model.StartsWith("qwen2-audio", StringComparison.OrdinalIgnoreCase)) return true;
@@ -511,7 +590,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
     protected override IChatResponse? ParseChunk(String data, IChatRequest request, String? lastEvent)
     {
         var chunk = data.ToJsonEntity<DashScopeResponse>(JsonOptions);
-        chunk?.Model = request.Model;
+        if (chunk != null) chunk.Model ??= request.Model;
         if (chunk is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion.chunk";
         return chunk;
     }
@@ -538,7 +617,7 @@ public partial class DashScopeChatClient : OpenAIChatClient, IRerankClient
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
 
         var path = request.RequestUri?.AbsolutePath;
-        if (String.IsNullOrEmpty(path)) return;
+        if (path.IsNullOrEmpty()) return;
 
         // 视频生成接口仅支持异步调用，必须携带该请求头
         if (path.EndsWith(VideoSynthesisPath, StringComparison.OrdinalIgnoreCase))

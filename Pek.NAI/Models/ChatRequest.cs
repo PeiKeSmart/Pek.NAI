@@ -44,7 +44,9 @@ public class ChatRequest : ChatOptions, IChatRequest
         request.Stop = options.Stop;
         request.PresencePenalty = options.PresencePenalty;
         request.FrequencyPenalty = options.FrequencyPenalty;
+        request.Seed = options.Seed;
         request.User = options.User;
+        request.ReasoningEffort = options.ReasoningEffort;
         request.EnableThinking = options.EnableThinking;
         request.ResponseFormat = options.ResponseFormat;
         request.ParallelToolCalls = options.ParallelToolCalls;
@@ -59,16 +61,11 @@ public class ChatRequest : ChatOptions, IChatRequest
                 request.Tools.Add(t);
         }
 
+        // 直接引用共享 options.Items（故意设计）：request 与调用方 options 共享同一字典，
+        // 协议层写入 request["xxx"]（如 DashScope 的 EnableWebExtractor）同步反映到调用方，
+        // 多轮循环持续保留协议专属键值。勿改为逐项拷贝（A-53 曾误改，已恢复）
         if (options.Items != null && options.Items.Count > 0)
-        {
-            if (request.Items == null || request.Items.Count == 0)
-                request.Items = options.Items;
-            else
-            {
-                foreach (var kv in options.Items)
-                    request.Items[kv.Key] = kv.Value;
-            }
-        }
+            request.Items = options.Items;
 
         return request;
     }

@@ -130,6 +130,14 @@ public class DashScopeRequest : IChatRequest
         set => Parameters.FrequencyPenalty = value;
     }
 
+    /// <summary>随机种子适配</summary>
+    [IgnoreDataMember]
+    Int32? IChatRequest.Seed
+    {
+        get => Parameters.Seed;
+        set => Parameters.Seed = value;
+    }
+
     /// <summary>可用工具列表适配</summary>
     [IgnoreDataMember]
     IList<ChatTool>? IChatRequest.Tools { get; set; }
@@ -141,6 +149,10 @@ public class DashScopeRequest : IChatRequest
         get => Parameters.ToolChoice;
         set => Parameters.ToolChoice = value;
     }
+
+    /// <summary>推理强度适配</summary>
+    [IgnoreDataMember]
+    String? IChatRequest.ReasoningEffort { get; set; }
 
     /// <summary>是否启用思考模式适配</summary>
     [IgnoreDataMember]
@@ -218,7 +230,7 @@ public class DashScopeRequest : IChatRequest
         if (request.ParallelToolCalls != null) p.ParallelToolCalls = request.ParallelToolCalls;
 
         // DashScope 专属扩展参数
-        var seed = request["Seed"] as Int32?;
+        var seed = request.Seed ?? (request["Seed"] as Int32?);
         if (seed != null) p.Seed = seed;
         var repetitionPenalty = request["RepetitionPenalty"] as Double?;
         if (repetitionPenalty != null) p.RepetitionPenalty = repetitionPenalty;
@@ -232,12 +244,19 @@ public class DashScopeRequest : IChatRequest
         if (logprobs != null) p.Logprobs = logprobs;
         var topLogprobs = request["TopLogprobs"] as Int32?;
         if (topLogprobs != null) p.TopLogprobs = topLogprobs;
+
+        // 高分辨率视觉输入参数（VlHighResolutionImages / MaxPixels，Items 键名与前端约定一致）
+        var vlHigh = request["VlHighResolutionImages"] as Boolean?;
+        if (vlHigh != null) p.VlHighResolutionImages = vlHigh;
+        var maxPixels = request["MaxPixels"] as Int32?;
+        if (maxPixels != null) p.MaxPixels = maxPixels;
+
         var enableSearch = request["EnableSearch"] as Boolean?;
         if (enableSearch != null) p.EnableSearch = enableSearch;
 
         var searchOptions = new Dictionary<String, Object>();
         var searchStrategy = request["SearchStrategy"] as String;
-        if (!String.IsNullOrEmpty(searchStrategy)) searchOptions["search_strategy"] = searchStrategy;
+        if (!searchStrategy.IsNullOrEmpty()) searchOptions["search_strategy"] = searchStrategy;
         var enableSource = request["EnableSource"] as Boolean?;
         if (enableSource != null) searchOptions["enable_source"] = enableSource.Value;
         var forcedSearch = request["ForcedSearch"] as Boolean?;
@@ -279,7 +298,7 @@ public class DashScopeRequest : IChatRequest
             if (!hasContents && !hasToolCalls && !HasRequiredContent(msg.Content))
                 continue;
 
-            var m = new DashScopeMessage { Role = msg.Role };
+            var m = new DashScopeMessage { Role = msg.Role, ReasoningContent = msg.ReasoningContent };
 
             if (hasContents)
                 m.Content = BuildContent(contents!, isMultimodal);
@@ -337,7 +356,7 @@ public class DashScopeRequest : IChatRequest
             return !text.IsNullOrWhiteSpace() ? text : (allowEmptyContent ? String.Empty : text);
 
         if (content == null)
-            return allowEmptyContent ? String.Empty : String.Empty;
+            return String.Empty;
 
         return content + String.Empty;
     }
@@ -505,6 +524,12 @@ public class DashScopeParameters
     /// <summary>返回对数概率的 top-K Token 数。需同时设置 Logprobs=true</summary>
     public Int32? TopLogprobs { get; set; }
 
+    /// <summary>高分辨率图像处理。true 时对视觉输入启用高分辨率模式（OCR/细节识别增强）</summary>
+    public Boolean? VlHighResolutionImages { get; set; }
+
+    /// <summary>图像输入最大像素数。限制上传图片的分辨率上限</summary>
+    public Int32? MaxPixels { get; set; }
+
     /// <summary>是否启用联网搜索</summary>
     public Boolean? EnableSearch { get; set; }
 
@@ -526,6 +551,9 @@ public class DashScopeMessage
 
     /// <summary>工具调用 ID。角色为 tool 时使用，标识响应哪个工具调用</summary>
     public String? ToolCallId { get; set; }
+
+    /// <summary>思考内容（推理链路）。多轮对话时回传上一轮 reasoning_content 保持上下文连贯</summary>
+    public String? ReasoningContent { get; set; }
 
     /// <summary>工具调用列表。角色为 assistant 且有工具调用时填充</summary>
     public IList<DashScopeToolCall>? ToolCalls { get; set; }

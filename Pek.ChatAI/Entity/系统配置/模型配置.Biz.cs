@@ -108,6 +108,7 @@ public partial class ModelConfig : Entity<ModelConfig>, IModelConfig
                     entity.SupportAudio = model.Capabilities.SupportAudio;
                     entity.SupportImage = model.Capabilities.SupportImage;
                     entity.SupportVideo = model.Capabilities.SupportVideo;
+                    entity.ReasoningEfforts = model.Capabilities.ReasoningEfforts;
                 }
 
                 count += entity.Save();
@@ -154,6 +155,14 @@ public partial class ModelConfig : Entity<ModelConfig>, IModelConfig
         var list = Meta.Count < MaxCacheCount ? FindAllWithCache() : FindAll(_.Enable == true);
         return list.Where(e => e.Enable && e.ProviderInfo?.Enable == true).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
     }
+
+    /// <summary>判断该模型是否为对话模型（可出现在 /chat 首页选择器中）。计算属性，不存库</summary>
+    /// <remarks>
+    /// 有任一 LLM 核心能力（思考/工具/视觉/语音识别）则为对话模型；或无任何专用输出标记则为纯文本对话模型
+    /// </remarks>
+    public Boolean IsChatModel =>
+        SupportThinking || SupportFunction || SupportVision || SupportAudio
+        || (!SupportSpeech && !SupportImage && !SupportVideo && !SupportEmbedding && !SupportRerank);
 
     // Select Count(Id) as Id,ProviderId From ModelConfig Where CreateTime>'2020-01-24 00:00:00' Group By ProviderId Order By Id Desc limit 20
     static readonly FieldCache<ModelConfig> _ProviderCache = new(nameof(ProviderId))
@@ -216,11 +225,11 @@ public partial class ModelConfig : Entity<ModelConfig>, IModelConfig
             if (roleArray.Intersect(roleIds).Any()) return true;
         }
 
-        // 检查部门权限
+        // 检查部门权限：用户部门或其任意祖先部门命中白名单即放行
         if (!DepartmentIds.IsNullOrEmpty())
         {
-            var deptArray = DepartmentIds.Split(',').Select(x => x.ToInt()).ToArray();
-            if (deptArray.Contains(departmentId)) return true;
+            var deptArray = DepartmentIds.SplitAsInt();
+            if (DepartmentHelper.GetDepartmentChain(departmentId).Any(id => deptArray.Contains(id))) return true;
         }
 
         return false;

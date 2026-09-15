@@ -4,7 +4,7 @@ namespace NewLife.AI.Embedding;
 
 /// <summary>向量数据序列化包装。存储模型名称、维度和 Base64 编码的 Single[] 数据，用于持久化 KnowledgeArticle.Vector 字段</summary>
 /// <remarks>
-/// 序列化格式（JSON）：<c>{"model":"local-hash-v1","dims":512,"data":"&lt;base64&gt;"}</c>
+/// 序列化格式（JSON）：<c>{"model":"local-hash-v2","dims":512,"data":"&lt;base64&gt;"}</c>
 /// 其中 data 为 Single[] 的字节序列（Buffer.BlockCopy），以 Base64 编码存储。
 /// 通过 <see cref="IsStale(String, Int32)"/> 同时比较模型名称和维度数，判断当前存储的向量是否需要重新计算。
 /// </remarks>
@@ -12,7 +12,7 @@ public class VectorData
 {
     #region 属性
 
-    /// <summary>生成向量所用的模型名称，不含维度信息的纯标识符，如 local-hash-v1 或 text-embedding-3-small</summary>
+    /// <summary>生成向量所用的模型名称，不含维度信息的纯标识符，如 local-hash-v2 或 text-embedding-3-small</summary>
     public String Model { get; set; } = "";
 
     /// <summary>向量维度数</summary>
@@ -26,7 +26,7 @@ public class VectorData
     #region 静态工厂
 
     /// <summary>从 Single[] 向量创建 VectorData，对字节序列进行 Base64 编码</summary>
-    /// <param name="model">模型名称（不含维度，如 local-hash-v1）</param>
+    /// <param name="model">模型名称（不含维度，如 local-hash-v2）</param>
     /// <param name="vector">原始向量</param>
     /// <returns>序列化包装对象</returns>
     public static VectorData FromVector(String model, Single[] vector)
@@ -70,15 +70,24 @@ public class VectorData
     #region 方法
 
     /// <summary>解码为原始 Single[] 向量</summary>
-    /// <returns>向量数组，Data 为空时返回空数组</returns>
+    /// <returns>向量数组，Data 为空或数据非法时返回空数组</returns>
     public Single[] ToVector()
     {
         if (Data.IsNullOrEmpty()) return [];
 
-        var bytes = Convert.FromBase64String(Data);
-        var result = new Single[bytes.Length / sizeof(Single)];
-        Buffer.BlockCopy(bytes, 0, result, 0, bytes.Length);
-        return result;
+        try
+        {
+            var bytes = Convert.FromBase64String(Data);
+            var result = new Single[bytes.Length / sizeof(Single)];
+            // 拷贝实际可容纳的字节数（截断尾部不足 4 字节的脏数据），避免 BlockCopy 越界
+            Buffer.BlockCopy(bytes, 0, result, 0, result.Length * sizeof(Single));
+            return result;
+        }
+        catch (FormatException)
+        {
+            // 脏数据（非法 base64）时与 Parse 的宽容策略保持一致，返回空数组而非崩溃
+            return [];
+        }
     }
 
     /// <summary>判断此向量是否与当前活跃模型或维度不匹配（即需要重新计算）</summary>

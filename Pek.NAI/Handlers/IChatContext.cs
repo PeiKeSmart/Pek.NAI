@@ -1,10 +1,9 @@
 ﻿using System.Text;
-using NewLife.AI.Handlers;
 using NewLife.AI.Interfaces;
 using NewLife.AI.Models;
 using NewLife.Data;
 
-namespace NewLife.AI.Services;
+namespace NewLife.AI.Handlers;
 
 /// <summary>对话处理上下文。在 <see cref="IChatHandler"/> 链各节点之间流转，
 /// 统一承载会话/模型/消息实体、对话上下文、收集器、用量与扩展数据</summary>
@@ -26,6 +25,10 @@ public interface IChatContext : IExtend
 
     /// <summary>会话技能编号（0 表示无技能；处理器内部可在执行过程中重写）</summary>
     Int32 SkillId { get; set; }
+
+    /// <summary>本轮已激活的技能列表。由 SkillActivationHandler 填充，按 Sort 降序。
+    /// IntentGateHandler 据此判断是否满足门控模式要求，不含系统技能（IsSystem=true）</summary>
+    IList<ISkill> ActivatedSkills { get; }
 
     /// <summary>思考模式</summary>
     ThinkingMode ThinkingMode { get; set; }
@@ -53,6 +56,16 @@ public interface IChatContext : IExtend
     /// <summary>对话上下文消息列表。事前处理器可追加/修改/截断；核心处理器据此发起模型调用</summary>
     IList<ChatMessage> ContextMessages { get; set; }
 
+    /// <summary>待注入 system 消息的有序文本片段列表（中段）。各处理器在 OnBefore 阶段调用 Add 追加内容，
+    /// <c>MessageFlow</c> 在所有 OnBefore 完成后统一将片段以 <c>"\n\n"</c> 拼接并追加到 system 消息末尾。
+    /// 适合注入：技能提示、工具激活提示、用户记忆、知识图谱等持久化上下文（与最新用户意图无关的稳定信息）</summary>
+    IList<String> SystemSegments { get; }
+
+    /// <summary>注入 system 消息末段的有序文本片段列表（末段）。在 <see cref="SystemSegments"/> 之后追加，
+    /// 紧贴 user 消息以获得最优 LLM 注意力分配。
+    /// 适合注入：本轮 RAG 检索结果、痛觉信号等与当前用户意图高度相关的即时上下文</summary>
+    IList<String> TailSegments { get; }
+
     ///// <summary>系统提示词内容。由 SystemPrompt 处理器填充，供持久化与诊断使用</summary>
     //String? SystemPrompt { get; set; }
 
@@ -73,11 +86,8 @@ public interface IChatContext : IExtend
 
     #region 模型调用参数
 
-    /// <summary>实际使用的最大 Token 数。由核心处理器在构建 ChatOptions 后填充</summary>
-    Int32 MaxTokens { get; set; }
-
-    /// <summary>实际使用的采样温度。由核心处理器在构建 ChatOptions 后填充</summary>
-    Double? Temperature { get; set; }
+    /// <summary>模型调用选项。由入口方法（四大方法/网关入口）在初始化上下文时完整填充，各 Handler 可在 OnBefore 阶段读取或修改</summary>
+    ChatOptions Options { get; set; }
 
     /// <summary>完成原因。由核心处理器在流式/非流式结束后填充</summary>
     String? FinishReason { get; set; }
@@ -126,17 +136,8 @@ public interface IChatContext : IExtend
     #region 来源与持久化
 
     /// <summary>消息流来源。标识当前上下文从哪条路径进入处理器链（Web / Gateway / Channel）。
-    /// 由各 <see cref="MessageFlow"/> 子类在构建上下文时设置，默认 <see cref="ChatFlowSource.Web"/></summary>
+    /// 由各 <see cref="NewLife.AI.Services.IMessageFlow"/> 子类在构建上下文时设置，默认 <see cref="ChatFlowSource.Web"/></summary>
     ChatFlowSource Source { get; set; }
-
-    /// <summary>是否将用户消息和 AI 回复消息持久化到数据库。
-    /// <list type="bullet">
-    ///   <item><see langword="true"/>（Web 默认）：<c>UserMessage</c> 和 <c>AssistantMessage</c> 正常 Insert/Update</item>
-    ///   <item><see langword="false"/>（Gateway / Channel 默认）：两条消息对象仍存在于内存，但 Id 为 0，
-    ///   不执行任何数据库写入；Handler 仍可从对象读取内容，例如 <c>LearningHandler</c> 从 <c>ContentBuilder</c> 读取回复</item>
-    /// </list>
-    /// </summary>
-    Boolean PersistMessages { get; set; }
 
     #endregion
 }

@@ -32,6 +32,10 @@ public partial class SuggestedQuestion : Entity<SuggestedQuestion>
     // 控制最大缓存数量，Find/FindAll查询方法在表行数小于该值时走实体缓存
     private static Int32 MaxCacheCount = 1000;
 
+    // 预设图标与颜色调色板，新建推荐问题时若未填写则自动选取
+    private static readonly String[] _autoIcons = ["chat", "code", "science", "menu_book", "brush", "fitness_center", "cloud", "location_on", "edit_note", "trending_up", "lightbulb", "psychology", "travel_explore", "calculate", "music_note"];
+    private static readonly String[] _autoColors = ["text-blue-500", "text-pink-500", "text-purple-500", "text-orange-500", "text-red-500", "text-cyan-500", "text-teal-500", "text-green-500", "text-yellow-500", "text-indigo-500"];
+
     static SuggestedQuestion()
     {
         // 累加字段，生成 Update xx Set Count=Count+1234 Where xxx
@@ -61,6 +65,14 @@ public partial class SuggestedQuestion : Entity<SuggestedQuestion>
 
         // 在新插入数据或者修改了指定字段时进行修正
 
+        // 新建时若未填写图标或颜色，根据问题文本自动选取，确保欢迎页展示效果一致
+        if (method == DataMethod.Insert && (Icon.IsNullOrEmpty() || Color.IsNullOrEmpty()))
+        {
+            var idx = Math.Abs((Question ?? Title ?? "").GetHashCode());
+            if (Icon.IsNullOrEmpty()) Icon = _autoIcons[idx % _autoIcons.Length];
+            if (Color.IsNullOrEmpty()) Color = _autoColors[(idx + 5) % _autoColors.Length];
+        }
+
         // 处理当前已登录用户信息，可以由UserInterceptor拦截器代劳
         /*var user = ManageProvider.User;
         if (user != null)
@@ -80,39 +92,62 @@ public partial class SuggestedQuestion : Entity<SuggestedQuestion>
     [EditorBrowsable(EditorBrowsableState.Never)]
     protected override void InitData()
     {
-        if (Meta.Session.Count > 0) return;
-
         if (XTrace.Debug) XTrace.WriteLine("开始初始化SuggestedQuestion[推荐问题]数据……");
+
+        // 原来是否已有数据，决定新增项是否默认启用
+        var hasExisting = Meta.Session.Count > 0;
+
+        // 以标题为去重键，已有标题的跳过，仅插入新增项
+        var existingTitles = hasExisting
+            ? Meta.Cache.FindAll(e => true).Select(e => e.Title).ToHashSet()
+            : new HashSet<String?>();
 
         var items = new[]
         {
-            new { Title = "写C#单例模式", Question = "请帮我用C#实现一个线程安全的单例模式，要求支持懒加载并分析适用场景", Icon = "code", Color = "text-blue-500" },
-            new { Title = "写一首春天的诗", Question = "请帮我写一首关于春天的诗，表达春意盎然的美好，风格清新自然", Icon = "brush", Color = "text-pink-500" },
-            new { Title = "解释量子计算", Question = "请通俗地解释量子计算的基本原理，以及它与传统计算机的本质区别", Icon = "science", Color = "text-purple-500" },
-            new { Title = "推荐几本好书", Question = "请推荐几本值得精读的经典好书，涵盖思维提升和人文社科方面，并说明各自的理由", Icon = "menu_book", Color = "text-orange-500" },
-            new { Title = "制定健身计划", Question = "请帮我制定一份适合上班族的周健身计划，包含有氧和力量训练，每次控制在30分钟内", Icon = "fitness_center", Color = "text-red-500" },
-            new { Title = "查询我这里天气", Question = "请查询我当前所在位置的天气情况，并给出今日出行建议", Icon = "cloud", Color = "text-cyan-500" },
-            new { Title = "我在哪里", Question = "请帮我查询我的当前位置，我在哪个城市？附近有哪些值得去的地方？", Icon = "location_on", Color = "text-teal-500" },
-            new { Title = "写一封请假邮件", Question = "请帮我写一封请病假的邮件，收件人是部门主管，语气正式得体，简明扼要", Icon = "edit_note", Color = "text-green-500" },
-            new { Title = "分析投资理财策略", Question = "对于普通投资者，请分析当前经济环境下有哪些稳健的理财和投资策略，如何做好风险控制", Icon = "trending_up", Color = "text-yellow-500" },
+            new { Title = "C#线程安全单例模式实现", Question = "请帮我用C#实现一个线程安全的单例模式，要求支持懒加载并分析适用场景", Icon = "code", Color = "text-blue-500" },
+            new { Title = "今日天气与春意诗词", Question = "今天天气怎么样？请结合当前天气和春天时令，为我写一首描绘春色的诗词", Icon = "cloud", Color = "text-cyan-500" },
+            new { Title = "通俗解读量子计算原理", Question = "请通俗地解释量子计算的基本原理，以及它与传统计算机的本质区别", Icon = "science", Color = "text-purple-500" },
+            new { Title = "了解我喜好的个性化荐书", Question = "请先了解一下我的个人信息，然后结合我的阅读偏好，推荐几本值得精读的经典好书", Icon = "menu_book", Color = "text-orange-500" },
+            new { Title = "制定上班族周健身计划", Question = "请帮我制定一份适合上班族的周健身计划，包含有氧和力量训练，每次控制在30分钟内", Icon = "fitness_center", Color = "text-red-500" },
+            new { Title = "先询问需求再规划旅行", Question = "我想计划一次出行。请先向我了解目的地偏好、旅行天数、预算和特殊需求，然后再为我生成包含交通、住宿、景点和餐饮的详细行程", Icon = "travel_explore", Color = "text-indigo-500" },
+            new { Title = "查询数据库中用户数据", Question = "帮我看一下系统里有哪些用户相关的数据表，然后统计今日新增注册用户数量和整体活跃情况", Icon = "storage", Color = "text-teal-500" },
+            new { Title = "编程语言热度与项目看板", Question = "请生成两张数据图表：柱状图对比主流编程语言的 GitHub 热度，饼图展示程序员工作日时间分配；最后帮我制作一个本周冲刺任务看板", Icon = "bar_chart", Color = "text-blue-400" },
+            new { Title = "绘制系统架构与学习知识树", Question = "先画一张前后端分离的系统架构图（涵盖浏览器→网关→后端→数据库各层），再整理一份「系统学习 C#」思维导图，分为语法、特性、工具和实战四大分支", Icon = "account_tree", Color = "text-violet-500" },
+            new { Title = "AI发展历程与科技城市地图", Question = "梳理 AI 领域从 2017 年 Transformer 到最近的关键里程碑做成时间轴，再在中国地图上标注主要科技城市并列出各地代表企业", Icon = "timeline", Color = "text-green-500" },
+            new { Title = "一线城市房产置业对比", Question = "我想在一线城市置业。请先确定当前公认的一线城市有哪些，然后针对每个城市分别分析其房产市场（价格水平、涨跌趋势、投资风险、租金回报），最后汇总对比给我置业建议", Icon = "trending_up", Color = "text-amber-500" },
+            new { Title = "搜索AI领域最新进展", Question = "帮我搜索最近大语言模型领域有什么重要进展，结合我的技术背景指出哪些方向值得重点关注", Icon = "search", Color = "text-pink-500" },
         };
 
+        var added = 0;
         for (var i = 0; i < items.Length; i++)
         {
             var item = items[i];
+            if (existingTitles.Contains(item.Title)) continue;
+
             var entity = new SuggestedQuestion
             {
                 Title = item.Title,
                 Question = item.Question,
                 Icon = item.Icon,
                 Color = item.Color,
-                Sort = items.Length - i,
-                Enable = true,
+                Enable = !hasExisting,
             };
             entity.Insert();
+            added++;
         }
 
-        if (XTrace.Debug) XTrace.WriteLine("完成初始化SuggestedQuestion[推荐问题]数据！");
+        if (XTrace.Debug) XTrace.WriteLine($"完成初始化SuggestedQuestion[推荐问题]数据，新增 {added} 条！");
+
+        // 修复旧版简历推荐问题中写死"张三"/"前端工程师"的问题，替换为使用当前用户真实信息的表述
+        const String oldResumeQuestion = "请用 @show_widget 工具生成一张个人简历 HTML 卡片，包含圆形头像占位（灰色背景）、姓名（张三）、职位（高级前端工程师）、技能标签（React / TypeScript / Node.js）、最近两段工作经历和联系方式，采用现代渐变卡片风格，宽度 560px";
+        const String newResumeQuestion = "请用 @show_widget 工具根据我的个人信息生成一张简历 HTML 卡片，包含圆形头像占位（灰色背景）、我的真实姓名与职位、相关技能标签、最近两段工作经历和联系方式，采用现代渐变卡片风格，宽度 560px";
+        var stale = Meta.Cache.Find(e => e.Question == oldResumeQuestion);
+        if (stale != null)
+        {
+            stale.Question = newResumeQuestion;
+            stale.Update();
+            if (XTrace.Debug) XTrace.WriteLine("已修复简历推荐问题：移除写死的姓名与职位");
+        }
     }
 
     ///// <summary>已重载。基类先调用Valid(true)验证数据，然后在事务保护内调用OnInsert</summary>
@@ -131,6 +166,13 @@ public partial class SuggestedQuestion : Entity<SuggestedQuestion>
     #endregion
 
     #region 扩展属性
+    /// <summary>会话</summary>
+    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
+    public Conversation? Conversation => Extends.Get(nameof(Conversation), k => Conversation.FindById(ConversationId));
+
+    /// <summary>会话</summary>
+    [Map(nameof(ConversationId), typeof(Conversation), "Id")]
+    public String? ConversationTitle => Conversation?.Title;
     #endregion
 
     #region 高级查询
@@ -150,19 +192,72 @@ public partial class SuggestedQuestion : Entity<SuggestedQuestion>
     public static IList<SuggestedQuestion> FindAllCachedEnabled()
         => Meta.Cache.FindAll(q => q.Enable);
 
-    /// <summary>从实体缓存中查找今日匹配指定问题且已缓存回答的推荐问题。用于命中缓存时直接返回</summary>
+    /// <summary>从实体缓存中获取启用的推荐问题，按更新时间降序取前N条。用于欢迎页等只需展示少量问题的场景</summary>
+    /// <param name="top">返回条数上限，默认50</param>
+    /// <returns>启用的推荐问题列表</returns>
+    public static IList<SuggestedQuestion> FindTopEnabledByUpdateTime(Int32 top = 50)
+    {
+        var all = Meta.Cache.FindAll(q => q.Enable);
+        if (all.Count <= top) return all;
+
+        return all.OrderByDescending(q => q.UpdateTime).Take(top).ToList();
+    }
+
+    /// <summary>从实体缓存中查找今日匹配指定问题且已关联助手消息的推荐问题。用于命中缓存时直接返回</summary>
     /// <param name="question">问题内容</param>
     /// <returns>匹配的推荐问题，未命中返回 null</returns>
     public static SuggestedQuestion? FindCachedTodayByQuestion(String question)
-        => Meta.Cache.FindAll(q => q.Enable && q.Question == question && !q.Response.IsNullOrEmpty() && q.UpdateTime.Date == DateTime.Today).FirstOrDefault();
+    {
+        var now = DateTime.Now;
+        return Meta.Cache.FindAll(q => q.Enable && q.Question == question && q.MessageId > 0 && IsCacheValid(q, now)).FirstOrDefault();
+    }
 
     /// <summary>从实体缓存中查找启用且匹配指定问题的推荐问题。用于回写缓存时定位目标记录</summary>
     /// <param name="question">问题内容</param>
     /// <returns>匹配的推荐问题，未命中返回 null</returns>
     public static SuggestedQuestion? FindCachedByQuestion(String question)
         => Meta.Cache.FindAll(q => q.Enable && q.Question == question).FirstOrDefault();
+
+    /// <summary>判断推荐问题的缓存是否仍然有效。CacheDuration=-1永不缓存；0=当天有效；正数=从更新时间起N分钟内有效</summary>
+    /// <param name="q">推荐问题实体</param>
+    /// <param name="now">当前时间</param>
+    /// <returns>缓存是否有效</returns>
+    private static Boolean IsCacheValid(SuggestedQuestion q, DateTime now) => q.CacheDuration switch
+    {
+        -1 => false,
+        0 => q.UpdateTime.Date == now.Date,
+        _ => now < q.UpdateTime.AddMinutes(q.CacheDuration),
+    };
     #endregion
 
     #region 业务操作
+    // 72小时半衰期对应的EMA衰减系数 λ = ln(2) / 72
+    private const Double _heatDecayLambda = 0.009627; // ln(2)/72 ≈ 0.009627
+
+    /// <summary>记录一次命中，更新热度分数（EMA）和命中计数。使用静态SQL Update绕过TimeInterceptor，不刷新UpdateTime</summary>
+    public void RecordHit()
+    {
+        var now = DateTime.Now;
+        Double newScore;
+        if (LastHitTime == default)
+        {
+            newScore = 1.0;
+        }
+        else
+        {
+            var elapsedHours = (now - LastHitTime).TotalHours;
+            newScore = HeatScore * Math.Exp(-_heatDecayLambda * elapsedHours) + 1.0;
+        }
+
+        var newCount = HitCount + 1;
+
+        // 直接走SQL，绕过TimeInterceptor，确保UpdateTime（缓存内容写入时间）不被刷新
+        Update(_.HeatScore == newScore & _.HitCount == newCount & _.LastHitTime == now, _.Id == Id);
+
+        // 同步更新内存中的实体缓存字段值
+        HeatScore = newScore;
+        HitCount = newCount;
+        LastHitTime = now;
+    }
     #endregion
 }

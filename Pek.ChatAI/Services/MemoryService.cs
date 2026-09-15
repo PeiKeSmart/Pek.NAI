@@ -109,6 +109,7 @@ public class MemoryService(ITracer tracer, ILog log)
     /// <param name="value">值</param>
     /// <param name="confidence">置信度（0-100）</param>
     /// <param name="conversationId">来源会话ID</param>
+    /// <param name="source">来源标识（可选），如消息 ID 或引用来源</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>保存后的记忆实体</returns>
     public virtual async Task<UserMemory> UpsertMemoryAsync(
@@ -118,6 +119,7 @@ public class MemoryService(ITracer tracer, ILog log)
         String value,
         Int32 confidence,
         Int64 conversationId,
+        String? source = null,
         CancellationToken cancellationToken = default)
     {
         await Task.Yield(); // 允许调用方继续（实体操作为同步，保持异步接口一致性）
@@ -135,6 +137,7 @@ public class MemoryService(ITracer tracer, ILog log)
                 existing.Value = value;
                 existing.Confidence = confidence;
                 existing.ConversationId = conversationId;
+                if (!source.IsNullOrEmpty()) existing.Source = source;
                 existing.Enable = true;
                 existing.Version++;
                 existing.Update();
@@ -152,6 +155,7 @@ public class MemoryService(ITracer tracer, ILog log)
             Confidence = confidence,
             ConversationId = conversationId,
             Scope = "user",
+            Source = source,
             Status = 1,
             Version = 1,
             Enable = true,

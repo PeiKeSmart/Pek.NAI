@@ -1,20 +1,21 @@
 ﻿using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
+using NewLife;
 using NewLife.Log;
+using NewLife.Serialization;
 
 namespace NewLife.ChatAI.Handlers;
 
 /// <summary>推荐问题缓存处理器。同时实现 <see cref="IChatHandler"/>（事前匹配 + 事后回写）（核心阶段命中时短路回放缓存内容）</summary>
 /// <remarks>
 /// <para>事前 (<see cref="OnBefore"/>)：精确匹配当天缓存。命中则写入 <c>Items["SuggestedHit"]</c> 标记。</para>
-/// <para>核心 (<see cref="InvokeAsync"/>)：检查标记。命中则插入 assistant 消息、流式回放缓存内容（按 StreamingSpeed 节流）；
+/// <para>核心 (<see cref="InvokeAsync"/>)：检查标记。命中则插入 assistant 消息、流式回放缓存内容（固定节流速度）；
 /// 未命中则透传给下游（最终 LLM 调用）。</para>
-/// <para>事后 (<see cref="OnAfter"/>)：未命中且生成成功时回写本次回复到缓存。</para>
+/// <para>事后 (<see cref="OnAfter"/>)：仅在推荐列表中的问题回写本次回复，供下次命中回放缓存；推荐问题由人工维护。</para>
 /// </remarks>
-/// <param name="setting">对话配置</param>
 [ChatHandlerOrder(10)]
-public class SuggestedCacheHandler(IChatSetting setting) : IChatHandler, IChatHandlerScope
+public class SuggestedCacheHandler : IChatHandler, IChatHandlerScope
 {
     private const String HitKey = "SuggestedHit";
 
@@ -31,7 +32,6 @@ public class SuggestedCacheHandler(IChatSetting setting) : IChatHandler, IChatHa
     /// <inheritdoc/>
     public Task OnBefore(IChatContext context, CancellationToken cancellationToken)
     {
-        if (!setting.EnableSuggestedQuestionCache) return Task.CompletedTask;
         var content = context.UserMessage?.Content;
         if (content.IsNullOrEmpty()) return Task.CompletedTask;
 
@@ -42,6 +42,8 @@ public class SuggestedCacheHandler(IChatSetting setting) : IChatHandler, IChatHa
             context.FlowControl = ChatFlowControl.SkipRemaining;
             context[HitKey] = cached;
             DefaultSpan.Current?.AppendTag(cached.Title!);
+            // fire-and-forget：记录命中，更新热度分数，不阻塞主流程
+            _ = Task.Run(() => cached.RecordHit());
         }
 
         return Task.CompletedTask;
@@ -57,43 +59,59 @@ public class SuggestedCacheHandler(IChatSetting setting) : IChatHandler, IChatHa
             yield break;
         }
 
-        // 命中：直接回放
+        // 命中：从关联的助手消息读取并全量回放（含工具调用）
+        var sourceMsg = DbChatMessage.FindById(cached.MessageId);
+        if (sourceMsg == null)
+        {
+            // 关联消息已丢失，降级走正常 LLM 路径
+            await foreach (var ev in next(cancellationToken).ConfigureAwait(false))
+                yield return ev;
+            yield break;
+        }
+
         if (context.AssistantMessage is not DbChatMessage msg)
         {
-            msg = new DbChatMessage { Role = "assistant", };
+            msg = new DbChatMessage { Role = "assistant", Enable = true };
         }
         msg.ConversationId = context.Conversation.Id;
-        msg.Content = cached.Response;
-        msg.ThinkingContent = cached.ThinkingResponse;
+        msg.Content = sourceMsg.Content;
+        msg.ThinkingContent = sourceMsg.ThinkingContent;
+        msg.ToolCalls = sourceMsg.ToolCalls;
         msg.Save();
         context.AssistantMessage = msg;
 
-        var streamingSpeed = setting.StreamingSpeed;
-
-        if (!cached.ThinkingResponse.IsNullOrEmpty())
+        // 1. 思考过程
+        if (!sourceMsg.ThinkingContent.IsNullOrEmpty())
         {
-            if (streamingSpeed > 5)
+            var thinking = sourceMsg.ThinkingContent;
+#if STARCHAT
+            // STARCHAT：思考内容压缩存储（NLBR: 前缀），回放给前端前还原明文
+            thinking = sourceMsg.GetThinking();
+#endif
+            if (!thinking.IsNullOrEmpty())
             {
-                yield return new ChatStreamEvent { Type = "thinking_delta", Content = cached.ThinkingResponse };
-            }
-            else
-            {
-                var (tChunkSize, tDelayMs) = GetCachedStreamingParams(streamingSpeed);
-                await foreach (var chunk in ThrottleTextAsync(cached.ThinkingResponse!, tChunkSize, tDelayMs, cancellationToken))
+                await foreach (var chunk in ThrottleTextAsync(thinking!, CachedChunkSize, CachedDelayMs, cancellationToken))
                     yield return new ChatStreamEvent { Type = "thinking_delta", Content = chunk };
             }
         }
 
-        if (streamingSpeed > 5)
+        // 2. 工具调用
+        if (!sourceMsg.ToolCalls.IsNullOrEmpty())
         {
-            yield return new ChatStreamEvent { Type = "content_delta", Content = cached.Response };
+            var toolCallDtos = sourceMsg.ToolCalls.ToJsonEntity<List<ToolCallDto>>();
+            if (toolCallDtos != null)
+            {
+                foreach (var tc in toolCallDtos)
+                {
+                    yield return new ChatStreamEvent { Type = "tool_call_start", ToolCallId = tc.Id, Name = tc.Name, Arguments = tc.Arguments };
+                    yield return new ChatStreamEvent { Type = "tool_call_done", ToolCallId = tc.Id, Name = tc.Name, Result = tc.Result };
+                }
+            }
         }
-        else
-        {
-            var (chunkSize, delayMs) = GetCachedStreamingParams(streamingSpeed);
-            await foreach (var chunk in ThrottleTextAsync(cached.Response ?? String.Empty, chunkSize, delayMs, cancellationToken))
-                yield return new ChatStreamEvent { Type = "content_delta", Content = chunk };
-        }
+
+        // 3. 正文内容
+        await foreach (var chunk in ThrottleTextAsync(sourceMsg.Content ?? String.Empty, CachedChunkSize, CachedDelayMs, cancellationToken))
+            yield return new ChatStreamEvent { Type = "content_delta", Content = chunk };
 
         yield return new ChatStreamEvent { Type = "message_done" };
     }
@@ -101,32 +119,32 @@ public class SuggestedCacheHandler(IChatSetting setting) : IChatHandler, IChatHa
     /// <inheritdoc/>
     public Task OnAfter(IChatContext context, CancellationToken cancellationToken)
     {
-        if (!setting.EnableSuggestedQuestionCache) return Task.CompletedTask;
         if (context.HasError || context.ContentBuilder.Length == 0) return Task.CompletedTask;
         if (context[HitKey] is SuggestedQuestion) return Task.CompletedTask; // 命中场景不回写
 
         var question = context.UserMessage?.Content;
         if (question.IsNullOrEmpty()) return Task.CompletedTask;
 
+        // 仅在推荐列表中的问题回写本次回复，供下次命中回放缓存（推荐问题由人工维护，不自动晋升）
         var sq = SuggestedQuestion.FindCachedByQuestion(question);
         if (sq == null) return Task.CompletedTask;
 
-        sq.Response = context.ContentBuilder.ToString();
-        sq.ThinkingResponse = context.ThinkingBuilder.ToString();
-        sq.ModelId = context.ModelConfig.Id;
-        sq.Update();
-
+        if (context.AssistantMessage is DbChatMessage savedMsg)
+        {
+            sq.ConversationId = savedMsg.ConversationId;
+            sq.MessageId = savedMsg.Id;
+            sq.Update();
+        }
+        // fire-and-forget：记录命中，更新热度分数，不阻塞主流程
+        _ = Task.Run(() => sq.RecordHit());
         return Task.CompletedTask;
     }
 
-    private static (Int32 ChunkSize, Int32 DelayMs) GetCachedStreamingParams(Int32 speed) => speed switch
-    {
-        1 => (4, 60),
-        2 => (6, 30),
-        4 => (14, 16),
-        5 => (24, 10),
-        _ => (10, 20),
-    };
+    /// <summary>缓存回放分块大小。固定速度 4 档：每块字符数</summary>
+    private const Int32 CachedChunkSize = 14;
+
+    /// <summary>缓存回放块间延迟（毫秒）。固定速度 4 档，兼顾快速输出与打字机效果</summary>
+    private const Int32 CachedDelayMs = 16;
 
     private static async IAsyncEnumerable<String> ThrottleTextAsync(String text, Int32 chunkSize, Int32 delayMs, [EnumeratorCancellation] CancellationToken cancellationToken)
     {

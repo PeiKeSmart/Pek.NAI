@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Icon } from '@/components/common/Icon'
 import type { ModelInfo } from '@/types'
@@ -17,7 +18,8 @@ const CAPABILITIES: { key: keyof ModelInfo; label: string; cls: string }[] = [
   { key: 'supportThinking', label: '思考', cls: 'text-purple-600 bg-purple-50 dark:text-purple-400 dark:bg-purple-900/25' },
   { key: 'supportFunction', label: '工具', cls: 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/25' },
   { key: 'supportVision', label: '视觉', cls: 'text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/25' },
-  { key: 'supportAudio', label: '音频', cls: 'text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-900/25' },
+  { key: 'supportAudio', label: '语音识别', cls: 'text-teal-600 bg-teal-50 dark:text-teal-400 dark:bg-teal-900/25' },
+  { key: 'supportSpeech', label: '语音合成', cls: 'text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-900/25' },
   { key: 'supportImage', label: '图像', cls: 'text-orange-600 bg-orange-50 dark:text-orange-400 dark:bg-orange-900/25' },
   { key: 'supportVideo', label: '视频', cls: 'text-rose-600 bg-rose-50 dark:text-rose-400 dark:bg-rose-900/25' },
 ]
@@ -29,6 +31,7 @@ export function ModelSelector({
   onModelChange,
   className,
 }: ModelSelectorProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
@@ -107,10 +110,10 @@ export function ModelSelector({
     <div ref={ref} className={cn('relative', className)}>
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm font-medium text-gray-700 dark:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+        className="flex items-center gap-1.5 max-w-[200px] max-md:max-w-[130px] overflow-hidden px-3 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm font-medium text-gray-700 dark:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
       >
-        <span>{selected?.name ?? '选择模型'}</span>
-        <Icon name="expand_more" size="base" className={cn('transition-transform', open && 'rotate-180')} />
+        <span className="truncate">{selected?.name ?? t('chat.selectModel')}</span>
+        <Icon name="expand_more" size="base" className={cn('transition-transform flex-shrink-0', open && 'rotate-180')} />
       </button>
 
       {open && pos !== null && createPortal(
@@ -148,7 +151,7 @@ export function ModelSelector({
             {/* 模型列表 */}
             <div className="p-1.5 overflow-y-auto custom-scrollbar flex-1">
               {filteredModels.length === 0 ? (
-                <p className="text-center text-sm text-gray-400 py-6">未找到匹配的模型</p>
+                <p className="text-center text-sm text-gray-400 py-6">{t('chat.noMatchingModel')}</p>
               ) : (
                 groupedModels.map(({ provider, models: groupModels }, gIdx) => (
                   <div key={provider || gIdx}>
@@ -180,7 +183,7 @@ export function ModelSelector({
                             <div className="min-w-0">
                               <span className="font-medium truncate block">{model.name}</span>
                               {isDefault && !isActive && (
-                                <span className="text-xs text-gray-400 dark:text-gray-500">默认</span>
+                                <span className="text-xs text-gray-400 dark:text-gray-500">{t('common.default')}</span>
                               )}
                             </div>
                           </div>

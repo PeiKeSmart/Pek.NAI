@@ -24,7 +24,8 @@ function Toggle({ checked, onChange, label, description }: Toggle) {
       >
         <span
           aria-hidden="true"
-          className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform ring-0 transition duration-200 ${checked ? 'translate-x-5' : 'translate-x-0'}`}
+          className="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0"
+          style={{ translate: `${checked ? 20 : 0}px 0`, transition: 'translate 0.2s ease-in-out' }}
         />
       </button>
     </div>
@@ -48,10 +49,10 @@ export function GatewaySettings({ settings, onChange }: Props) {
         description={t('systemSettings.gateway.enableGatewayDesc')}
       />
       <Toggle
-        checked={settings.enableGatewayRecording}
-        onChange={(v) => onChange({ enableGatewayRecording: v })}
-        label={t('systemSettings.gateway.enableGatewayRecording')}
-        description={t('systemSettings.gateway.enableGatewayRecordingDesc')}
+        checked={settings.enableGatewayDomainMode}
+        onChange={(v) => onChange({ enableGatewayDomainMode: v })}
+        label={t('systemSettings.gateway.enableGatewayDomainMode')}
+        description={t('systemSettings.gateway.enableGatewayDomainModeDesc')}
       />
       <div className="py-3">
         <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
@@ -63,19 +64,6 @@ export function GatewaySettings({ settings, onChange }: Props) {
           min={0}
           value={settings.gatewayRateLimit}
           onChange={(e) => onChange({ gatewayRateLimit: Number(e.target.value) })}
-          className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
-        />
-      </div>
-      <div className="py-3">
-        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
-          {t('systemSettings.gateway.upstreamRetryCount')}
-        </label>
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">{t('systemSettings.gateway.upstreamRetryCountDesc')}</p>
-        <input
-          type="number"
-          min={0}
-          value={settings.upstreamRetryCount}
-          onChange={(e) => onChange({ upstreamRetryCount: Number(e.target.value) })}
           className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
       </div>

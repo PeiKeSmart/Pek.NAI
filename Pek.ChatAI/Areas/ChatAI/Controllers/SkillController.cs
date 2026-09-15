@@ -12,7 +12,7 @@ using static NewLife.ChatAI.Entity.Skill;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>技能。可复用的AI行为指令，Markdown格式的结构化提示文本</summary>
-[Menu(60, true, Icon = "fa-table")]
+[Menu(9799, true, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class SkillController : EntityController<Skill>
 {
@@ -58,10 +58,11 @@ public class SkillController : EntityController<Skill>
         var category = p["category"];
         var isSystem = p["isSystem"]?.ToBoolean();
         var enable = p["enable"]?.ToBoolean();
+        var isPrimary = p["isPrimary"]?.ToBoolean();
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return Skill.Search(code, category, isSystem, enable, start, end, p["Q"], p);
+        return Skill.Search(code, category, isSystem, isPrimary, enable, start, end, p["Q"], p);
     }
 }

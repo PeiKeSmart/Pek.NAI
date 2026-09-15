@@ -15,7 +15,11 @@ public enum ThinkingMode
 
     /// <summary>快速</summary>
     [Description("快速")]
-    Fast = 2
+    Fast = 2,
+
+    /// <summary>澄清。先与用户确认意图与关键参数，再执行复杂任务；通常配合 ask_user 工具实现交互闭环</summary>
+    [Description("澄清")]
+    Clarify = 3
 }
 
 /// <summary>反馈类型</summary>
@@ -92,6 +96,46 @@ public enum ResponseStyle
     Creative = 3,
 }
 
+/// <summary>客服入口位置。控制客服文本/链接在页面中的展示位置，None=不展示</summary>
+public enum SupportPosition
+{
+    /// <summary>不显示。客服入口不展示</summary>
+    [Description("不显示")]
+    None = 0,
+
+    /// <summary>侧边栏底部。显示在侧边栏底部</summary>
+    [Description("侧边栏底部")]
+    SidebarBottom = 1,
+
+    /// <summary>新对话按钮下方。显示在新对话按钮下方</summary>
+    [Description("新对话按钮下方")]
+    BelowNewChat = 2,
+
+    /// <summary>右下角悬浮球。显示为右下角悬浮球</summary>
+    [Description("右下角悬浮球")]
+    FloatingButton = 3,
+}
+
+/// <summary>推理过程布局。控制 AI 推理过程的展示位置与展开方式</summary>
+public enum ThinkingLayout
+{
+    /// <summary>默认。跟随系统默认（上方折叠）</summary>
+    [Description("默认")]
+    Default = 0,
+
+    /// <summary>上方折叠。推理过程折叠在内容上方</summary>
+    [Description("上方折叠")]
+    AboveCollapsed = 1,
+
+    /// <summary>上方展开。推理过程展开在内容上方</summary>
+    [Description("上方展开")]
+    AboveExpanded = 2,
+
+    /// <summary>右侧分栏。推理过程显示在右侧分栏对照</summary>
+    [Description("右侧分栏")]
+    Side = 3,
+}
+
 /// <summary>计费模式。控制 ModelConfig 上价格字段的解释方式</summary>
 public enum PricingMode
 {
@@ -110,4 +154,8 @@ public enum PricingMode
     /// <summary>按 Embedding 调用。EmbeddingPrice 单位：元/百万Token</summary>
     [Description("按Embedding")]
     Embedding = 3,
+
+    /// <summary>按语音合成字符数。SpeechPrice 单位：元/千字符</summary>
+    [Description("按语音合成")]
+    Speech = 4,
 }

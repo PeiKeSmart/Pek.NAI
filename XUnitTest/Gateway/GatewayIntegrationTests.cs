@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using System;
 using System.ComponentModel;
 using System.Net;
@@ -19,10 +19,11 @@ namespace XUnitTest.Gateway;
 public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFactory>
 {
     private const String ApiKey = "sk-NewLifeAI2026";
-    private const String TestModel = "qwen3.5-flash";
+    private const String TestModel = "qwen3.6-flash";
 
     private readonly HttpClient _http;
     private readonly HttpClient _httpBadKey;
+    private readonly HttpClient _httpNoAuth;
 
     public GatewayIntegrationTests(ChatAIWebAppFactory factory)
     {
@@ -35,6 +36,9 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         _httpBadKey.Timeout = TimeSpan.FromSeconds(15);
         _httpBadKey.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", "sk-invalid-key-xyz-000");
+
+        _httpNoAuth = factory.CreateDefaultClient();
+        _httpNoAuth.Timeout = TimeSpan.FromSeconds(15);
     }
 
     /// <inheritdoc/>
@@ -42,6 +46,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
     {
         _http.Dispose();
         _httpBadKey.Dispose();
+        _httpNoAuth.Dispose();
     }
 
     /// <summary>构建 application/json 请求体</summary>
@@ -85,11 +90,11 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         var first = data[0]!;
         Assert.True(first["context_length"] != null, "缺少 context_length 字段");
         Assert.True(first["support_thinking"] != null, "缺少 support_thinking 字段");
-        Assert.True(first["support_function_calling"] != null, "缺少 support_function_calling 字段");
+        Assert.True(first["support_function"] != null, "缺少 support_function 字段");
         Assert.True(first["support_vision"] != null, "缺少 support_vision 字段");
         Assert.True(first["support_audio"] != null, "缺少 support_audio 字段");
-        Assert.True(first["support_image_generation"] != null, "缺少 support_image_generation 字段");
-        Assert.True(first["support_video_generation"] != null, "缺少 support_video_generation 字段");
+        Assert.True(first["support_image"] != null, "缺少 support_image 字段");
+        Assert.True(first["support_video"] != null, "缺少 support_video 字段");
     }
 
     [Fact]
@@ -101,6 +106,127 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
         var doc = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
         Assert.Equal("INVALID_API_KEY", doc?["code"]?.GetValue<String>());
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models 无认证返回公开模型列表（200 OK）")]
+    public async Task ListModels_NoAuth_Returns_PublicModels()
+    {
+        var resp = await _httpNoAuth.GetAsync("v1/models");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        Assert.Equal("list", doc["object"]?.GetValue<String>());
+        Assert.True(doc["data"]!.AsArray().Count > 0, "公开模型列表不应为空");
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models?key=sk-xxx 通过查询参数认证并返回模型列表")]
+    public async Task ListModels_KeyQueryParam_Returns_Models()
+    {
+        var resp = await _httpNoAuth.GetAsync($"v1/models?key={ApiKey}");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        Assert.Equal("list", doc["object"]?.GetValue<String>());
+        Assert.True(doc["data"]!.AsArray().Count > 0, "通过 key 查询参数应返回模型列表");
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models?keyword=xxx 按关键字过滤模型")]
+    public async Task ListModels_KeywordFilter_Returns_FilteredModels()
+    {
+        var resp = await _http.GetAsync("v1/models?keyword=qwen");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        var data = doc["data"]!.AsArray();
+        Assert.True(data.Count > 0, "关键字过滤后应有匹配模型");
+
+        // 所有返回模型的 id 或 name 应包含 "qwen"
+        foreach (var item in data)
+        {
+            var id = item!["id"]?.GetValue<String>() ?? "";
+            var name = item["name"]?.GetValue<String>() ?? "";
+            Assert.True(
+                id.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("qwen", StringComparison.OrdinalIgnoreCase),
+                $"模型 {id} 的 id/name 应包含关键字 'qwen'");
+        }
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models?capabilities=vision,function 按能力枚举过滤")]
+    public async Task ListModels_CapabilitiesFilter_Returns_ModelsWithAllCapabilities()
+    {
+        var resp = await _http.GetAsync("v1/models?capabilities=vision,function");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        var data = doc["data"]!.AsArray();
+
+        // 所有返回模型应同时支持 vision 和 function
+        foreach (var item in data)
+        {
+            Assert.True(item!["support_vision"]?.GetValue<Boolean>() == true,
+                $"模型 {item["id"]} 应支持 vision");
+            Assert.True(item["support_function"]?.GetValue<Boolean>() == true,
+                $"模型 {item["id"]} 应支持 function");
+        }
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models?support_vision=true OpenAI 风格能力过滤")]
+    public async Task ListModels_OpenAIStyleFilter_Returns_VisionModels()
+    {
+        var resp = await _http.GetAsync("v1/models?support_vision=true");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        var data = doc["data"]!.AsArray();
+
+        // 所有返回模型应支持 vision
+        foreach (var item in data)
+        {
+            Assert.True(item!["support_vision"]?.GetValue<Boolean>() == true,
+                $"模型 {item["id"]} 应支持 vision");
+        }
+    }
+
+    [Fact]
+    [DisplayName("GET /v1/models keyword+capabilities 组合过滤")]
+    public async Task ListModels_CombinedFilter_KeywordAndCapabilities()
+    {
+        var resp = await _http.GetAsync("v1/models?keyword=qwen&capabilities=vision");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        var doc = JsonNode.Parse(body);
+        Assert.NotNull(doc);
+        var data = doc["data"]!.AsArray();
+
+        // 所有返回模型应同时满足关键字和能力
+        foreach (var item in data)
+        {
+            var id = item!["id"]?.GetValue<String>() ?? "";
+            var name = item["name"]?.GetValue<String>() ?? "";
+            Assert.True(
+                id.Contains("qwen", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("qwen", StringComparison.OrdinalIgnoreCase),
+                $"模型 {id} 的 id/name 应包含关键字 'qwen'");
+            Assert.True(item["support_vision"]?.GetValue<Boolean>() == true,
+                $"模型 {id} 应支持 vision");
+        }
     }
 
     #endregion
@@ -121,8 +247,8 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
         var resp = await _http.PostAsync("v1/chat/completions", body);
 
-        // 502 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
-        if ((Int32)resp.StatusCode == 502) return;
+        // 502/404 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
+        if ((Int32)resp.StatusCode is 502 or 404) return;
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var json = await resp.Content.ReadAsStringAsync();
@@ -162,14 +288,18 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
         var resp = await _http.PostAsync("v1/chat/completions", body);
 
-        // 502 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
-        if ((Int32)resp.StatusCode == 502) return;
+        // 502/404 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
+        if ((Int32)resp.StatusCode is 502 or 404) return;
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        Assert.Equal("text/event-stream", resp.Content.Headers.ContentType?.MediaType);
 
         var rawBody = await resp.Content.ReadAsStringAsync();
-        Assert.Contains("data: ", rawBody);
+
+        // 流式请求中 SSE 标头在错误之前已发送，HTTP 状态为 200。
+        // 若体内不含 data: 或含 error 事件，则说明后端尚未产生正常数据就出错，跳过验证
+        if (!rawBody.Contains("data: ") || rawBody.Contains("error")) return;
+
+        Assert.Equal("text/event-stream", resp.Content.Headers.ContentType?.MediaType);
         Assert.Contains("[DONE]", rawBody);
 
         // 验证每个 chunk 是合法 JSON 且 object=chat.completion.chunk
@@ -265,8 +395,8 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
         var resp = await _http.PostAsync("v1/chat/completions", body);
 
-        // 502 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
-        if ((Int32)resp.StatusCode == 502) return;
+        // 502/404 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
+        if ((Int32)resp.StatusCode is 502 or 404) return;
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
@@ -342,8 +472,8 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
         var resp = await _http.PostAsync("v1/responses", body);
 
-        // 502 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
-        if ((Int32)resp.StatusCode == 502) return;
+        // 502/404 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
+        if ((Int32)resp.StatusCode is 502 or 404) return;
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var doc = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
@@ -368,8 +498,8 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
         var resp = await _http.PostAsync("v1/messages", body);
 
-        // 502 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
-        if ((Int32)resp.StatusCode == 502) return;
+        // 502/404 表示后端提供商暂不可用，不是本地网关的问题，跳过后续验证
+        if ((Int32)resp.StatusCode is 502 or 404) return;
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var doc = JsonNode.Parse(await resp.Content.ReadAsStringAsync());

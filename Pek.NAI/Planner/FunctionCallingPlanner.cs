@@ -6,8 +6,6 @@ namespace NewLife.AI.Planner;
 /// <summary>基于函数调用的执行计划实现</summary>
 internal sealed class FunctionCallingPlan : IPlan
 {
-    private readonly Object _lock = new();
-
     /// <summary>规划目标</summary>
     public String Goal { get; }
 
@@ -45,6 +43,13 @@ internal sealed class FunctionCallingPlan : IPlan
                     step.Result = await toolInvoker(step.ToolName, step.Arguments, cancellationToken).ConfigureAwait(false);
                     step.Status = PlanStepStatus.Completed;
                 }
+                catch (OperationCanceledException)
+                {
+                    // 取消必须向上传播，不能当作普通步骤失败处理
+                    step.Status = PlanStepStatus.Failed;
+                    Status = PlanStatus.Failed;
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     step.Status = PlanStepStatus.Failed;
@@ -54,6 +59,10 @@ internal sealed class FunctionCallingPlan : IPlan
                 }
             }
             Status = PlanStatus.Completed;
+            // A-45：所有步骤完成后填充 FinalAnswer（最后一个成功步骤的结果），兑现接口承诺
+            var lastCompleted = Steps.LastOrDefault(s => s.Status == PlanStepStatus.Completed);
+            if (lastCompleted != null)
+                FinalAnswer = lastCompleted.Result;
         }
         catch (OperationCanceledException)
         {
@@ -67,7 +76,13 @@ internal sealed class FunctionCallingPlan : IPlan
 
 /// <summary>基于函数调用的规划器。向 LLM 提交目标与工具描述，解析 tool_calls 作为计划步骤</summary>
 /// <remarks>
-/// 工作流：
+/// <para>使用示例：</para>
+/// <code>
+/// var planner = new FunctionCallingPlanner();
+/// var plan = await planner.CreatePlanAsync("查询北京天气并汇总", tools, chatClient);
+/// await plan.ExecuteAsync(async (name, args, ct) => await InvokeToolAsync(name, args), cancellationToken);
+/// </code>
+/// <para>工作流：</para>
 /// <list type="number">
 /// <item>将 goal 封装为 user 消息，将 tools 追加到请求</item>
 /// <item>调用 chatClient.CompleteAsync 获取 LLM 响应</item>

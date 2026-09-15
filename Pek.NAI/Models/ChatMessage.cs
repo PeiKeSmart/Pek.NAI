@@ -1,10 +1,12 @@
 ﻿using System.Runtime.Serialization;
+using NewLife.Data;
+using NewLife.Log;
 using NewLife.Serialization;
 
 namespace NewLife.AI.Models;
 
 /// <summary>对话消息</summary>
-public class ChatMessage
+public class ChatMessage : IExtend
 {
     #region 属性
     /// <summary>角色。system/user/assistant/tool</summary>
@@ -24,6 +26,18 @@ public class ChatMessage
 
     /// <summary>思考内容。部分模型返回的推理链路（reasoning_content）</summary>
     public String? ReasoningContent { get; set; }
+
+    /// <summary>扩展数据。用于在中间件管道中传递非结构化的自定义上下文（如 Anthropic 思考签名、redacted_thinking 数据等协议专属元数据，供多轮对话原样回传）</summary>
+    [IgnoreDataMember]
+    public IDictionary<String, Object?> Items { get; set; } = new Dictionary<String, Object?>();
+
+    /// <summary>索引器，方便访问扩展数据。读取时 Items 为 null 返回 null；写入时自动创建，防止空异常</summary>
+    [IgnoreDataMember]
+    public Object? this[String key]
+    {
+        get => Items != null && Items.TryGetValue(key, out var value) ? value : null;
+        set => (Items ??= new Dictionary<String, Object?>())[key] = value;
+    }
 
     /// <summary>类型化内容片段列表（MEAI 兼容）。非空时优先于 <see cref="Content"/> 使用，支持多模态消息</summary>
     /// <remarks>
@@ -69,11 +83,16 @@ public class ChatMessage
 
             try
             {
-                // 包装为对象以便 JsonParser.Decode 解析
-                var wrapper = JsonParser.Decode("{\"items\":" + json + "}");
-                items = wrapper?["items"] as IList<Object>;
+                // new JsonParser().Decode() 支持解析顶层 JSON 数组，而静态 JsonParser.Decode 只支持对象
+                var parsed = new JsonParser(json).Decode();
+                items = parsed as IList<Object>;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                // A-56：记录解析失败原因，便于排障（返回 null 由调用方回退处理）
+                XTrace.WriteLine("[ChatMessage] 多模态内容 JSON 解析失败：{0}，前200字符：{1}", ex.Message, json.Length > 200 ? json[..200] : json);
+                return null;
+            }
         }
 
         if (items == null || items.Count == 0) return null;

@@ -29,17 +29,8 @@ public partial interface IAppKey
     /// <summary>启用</summary>
     Boolean Enable { get; set; }
 
-    /// <summary>过期时间。null表示永不过期</summary>
+    /// <summary>过期时间。DateTime.MinValue 表示永不过期（XCode 实体 DateTime 值类型，无法为 null）</summary>
     DateTime ExpireTime { get; set; }
-
-    /// <summary>最后调用时间</summary>
-    DateTime LastCallTime { get; set; }
-
-    /// <summary>调用次数。累计API请求数</summary>
-    Int64 Calls { get; set; }
-
-    /// <summary>总Token数。累计消耗Token</summary>
-    Int64 TotalTokens { get; set; }
 
     /// <summary>备注</summary>
     String? Remark { get; set; }

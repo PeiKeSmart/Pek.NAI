@@ -63,11 +63,11 @@ public partial class ModelConfig
     public String? UpstreamModel { get => _UpstreamModel; set { if (OnPropertyChanging("UpstreamModel", value)) { _UpstreamModel = value; OnPropertyChanged("UpstreamModel"); } } }
 
     private Int32 _ContextLength;
-    /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
-    [DisplayName("上下文长度")]
-    [Description("上下文长度。模型支持的上下文窗口大小（令牌数）")]
+    /// <summary>上下文。模型支持的上下文窗口大小（令牌数）</summary>
+    [DisplayName("上下文")]
+    [Description("上下文。模型支持的上下文窗口大小（令牌数）")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("ContextLength", "上下文长度。模型支持的上下文窗口大小（令牌数）", "")]
+    [BindColumn("ContextLength", "上下文。模型支持的上下文窗口大小（令牌数）", "", ItemType = "GMK")]
     public Int32 ContextLength { get => _ContextLength; set { if (OnPropertyChanging("ContextLength", value)) { _ContextLength = value; OnPropertyChanged("ContextLength"); } } }
 
     private Boolean _SupportThinking;
@@ -102,6 +102,14 @@ public partial class ModelConfig
     [BindColumn("SupportAudio", "音频。是否支持音频输入输出", "")]
     public Boolean SupportAudio { get => _SupportAudio; set { if (OnPropertyChanging("SupportAudio", value)) { _SupportAudio = value; OnPropertyChanged("SupportAudio"); } } }
 
+    private Boolean _SupportSpeech;
+    /// <summary>语音合成。是否支持语音合成/音频输出（TTS）</summary>
+    [DisplayName("语音合成")]
+    [Description("语音合成。是否支持语音合成/音频输出（TTS）")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("SupportSpeech", "语音合成。是否支持语音合成/音频输出（TTS）", "")]
+    public Boolean SupportSpeech { get => _SupportSpeech; set { if (OnPropertyChanging("SupportSpeech", value)) { _SupportSpeech = value; OnPropertyChanged("SupportSpeech"); } } }
+
     private Boolean _SupportImage;
     /// <summary>图像。是否支持文生图</summary>
     [DisplayName("图像")]
@@ -126,6 +134,31 @@ public partial class ModelConfig
     [BindColumn("SupportEmbedding", "嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景", "")]
     public Boolean SupportEmbedding { get => _SupportEmbedding; set { if (OnPropertyChanging("SupportEmbedding", value)) { _SupportEmbedding = value; OnPropertyChanged("SupportEmbedding"); } } }
 
+    private Boolean _SupportRerank;
+    /// <summary>重排序。是否支持重排序接口，用于RAG场景</summary>
+    [DisplayName("重排序")]
+    [Description("重排序。是否支持重排序接口，用于RAG场景")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("SupportRerank", "重排序。是否支持重排序接口，用于RAG场景", "")]
+    public Boolean SupportRerank { get => _SupportRerank; set { if (OnPropertyChanging("SupportRerank", value)) { _SupportRerank = value; OnPropertyChanged("SupportRerank"); } } }
+
+    private String? _ReasoningEfforts;
+    /// <summary>推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持</summary>
+    [DisplayName("推理强度")]
+    [Description("推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持")]
+    [DataObjectField(false, false, true, 50)]
+    [BindColumn("ReasoningEfforts", "推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持", "")]
+    public String? ReasoningEfforts { get => _ReasoningEfforts; set { if (OnPropertyChanging("ReasoningEfforts", value)) { _ReasoningEfforts = value; OnPropertyChanged("ReasoningEfforts"); } } }
+
+    private Boolean _EnablePromptCache;
+    /// <summary>提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本</summary>
+    [Category("计费")]
+    [DisplayName("提示缓存")]
+    [Description("提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("EnablePromptCache", "提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本", "")]
+    public Boolean EnablePromptCache { get => _EnablePromptCache; set { if (OnPropertyChanging("EnablePromptCache", value)) { _EnablePromptCache = value; OnPropertyChanged("EnablePromptCache"); } } }
+
     private String? _SystemPrompt;
     /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
     [DisplayName("系统提示词")]
@@ -133,6 +166,15 @@ public partial class ModelConfig
     [DataObjectField(false, false, true, 2000)]
     [BindColumn("SystemPrompt", "系统提示词。模型级System Prompt，发送给上游的系统消息", "", ItemType = "markdown", ShowIn = "Auto,-List,-Search")]
     public String? SystemPrompt { get => _SystemPrompt; set { if (OnPropertyChanging("SystemPrompt", value)) { _SystemPrompt = value; OnPropertyChanged("SystemPrompt"); } } }
+
+    private String? _Settings;
+    /// <summary>模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释</summary>
+    [Category("扩展")]
+    [DisplayName("模型设置")]
+    [Description("模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释")]
+    [DataObjectField(false, false, true, 2000)]
+    [BindColumn("Settings", "模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释", "", ItemType = "json")]
+    public String? Settings { get => _Settings; set { if (OnPropertyChanging("Settings", value)) { _Settings = value; OnPropertyChanged("Settings"); } } }
 
     private String? _RoleIds;
     /// <summary>角色组。逗号分隔的角色ID列表，为空时不限制</summary>
@@ -173,6 +215,14 @@ public partial class ModelConfig
     [DataObjectField(false, false, false, 0)]
     [BindColumn("Sort", "排序。越大越靠前", "")]
     public Int32 Sort { get => _Sort; set { if (OnPropertyChanging("Sort", value)) { _Sort = value; OnPropertyChanged("Sort"); } } }
+
+    private Boolean _Locked;
+    /// <summary>锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改</summary>
+    [DisplayName("锁定")]
+    [Description("锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("Locked", "锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改", "")]
+    public Boolean Locked { get => _Locked; set { if (OnPropertyChanging("Locked", value)) { _Locked = value; OnPropertyChanged("Locked"); } } }
 
     private Int32 _CreateUserID;
     /// <summary>创建用户</summary>
@@ -256,15 +306,21 @@ public partial class ModelConfig
             "SupportFunction" => _SupportFunction,
             "SupportVision" => _SupportVision,
             "SupportAudio" => _SupportAudio,
+            "SupportSpeech" => _SupportSpeech,
             "SupportImage" => _SupportImage,
             "SupportVideo" => _SupportVideo,
             "SupportEmbedding" => _SupportEmbedding,
+            "SupportRerank" => _SupportRerank,
+            "ReasoningEfforts" => _ReasoningEfforts,
+            "EnablePromptCache" => _EnablePromptCache,
             "SystemPrompt" => _SystemPrompt,
+            "Settings" => _Settings,
             "RoleIds" => _RoleIds,
             "DepartmentIds" => _DepartmentIds,
             "ModelTime" => _ModelTime,
             "Enable" => _Enable,
             "Sort" => _Sort,
+            "Locked" => _Locked,
             "CreateUserID" => _CreateUserID,
             "CreateIP" => _CreateIP,
             "CreateTime" => _CreateTime,
@@ -288,15 +344,21 @@ public partial class ModelConfig
                 case "SupportFunction": _SupportFunction = value.ToBoolean(); break;
                 case "SupportVision": _SupportVision = value.ToBoolean(); break;
                 case "SupportAudio": _SupportAudio = value.ToBoolean(); break;
+                case "SupportSpeech": _SupportSpeech = value.ToBoolean(); break;
                 case "SupportImage": _SupportImage = value.ToBoolean(); break;
                 case "SupportVideo": _SupportVideo = value.ToBoolean(); break;
                 case "SupportEmbedding": _SupportEmbedding = value.ToBoolean(); break;
+                case "SupportRerank": _SupportRerank = value.ToBoolean(); break;
+                case "ReasoningEfforts": _ReasoningEfforts = Convert.ToString(value); break;
+                case "EnablePromptCache": _EnablePromptCache = value.ToBoolean(); break;
                 case "SystemPrompt": _SystemPrompt = Convert.ToString(value); break;
+                case "Settings": _Settings = Convert.ToString(value); break;
                 case "RoleIds": _RoleIds = Convert.ToString(value); break;
                 case "DepartmentIds": _DepartmentIds = Convert.ToString(value); break;
                 case "ModelTime": _ModelTime = value.ToDateTime(); break;
                 case "Enable": _Enable = value.ToBoolean(); break;
                 case "Sort": _Sort = value.ToInt(); break;
+                case "Locked": _Locked = value.ToBoolean(); break;
                 case "CreateUserID": _CreateUserID = value.ToInt(); break;
                 case "CreateIP": _CreateIP = Convert.ToString(value); break;
                 case "CreateTime": _CreateTime = value.ToDateTime(); break;
@@ -375,16 +437,20 @@ public partial class ModelConfig
     /// <param name="supportFunction">函数调用。是否支持Function Calling</param>
     /// <param name="supportVision">视觉。是否支持图片输入</param>
     /// <param name="supportAudio">音频。是否支持音频输入输出</param>
+    /// <param name="supportSpeech">语音合成。是否支持语音合成/音频输出（TTS）</param>
     /// <param name="supportImage">图像。是否支持文生图</param>
     /// <param name="supportVideo">视频生成。是否支持文生视频</param>
     /// <param name="supportEmbedding">嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</param>
+    /// <param name="supportRerank">重排序。是否支持重排序接口，用于RAG场景</param>
+    /// <param name="enablePromptCache">提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本</param>
+    /// <param name="locked">锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改</param>
     /// <param name="enable">启用</param>
     /// <param name="start">更新时间开始</param>
     /// <param name="end">更新时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<ModelConfig> Search(Int32 providerId, String? code, Boolean? supportThinking, Boolean? supportFunction, Boolean? supportVision, Boolean? supportAudio, Boolean? supportImage, Boolean? supportVideo, Boolean? supportEmbedding, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<ModelConfig> Search(Int32 providerId, String? code, Boolean? supportThinking, Boolean? supportFunction, Boolean? supportVision, Boolean? supportAudio, Boolean? supportSpeech, Boolean? supportImage, Boolean? supportVideo, Boolean? supportEmbedding, Boolean? supportRerank, Boolean? enablePromptCache, Boolean? locked, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
@@ -394,9 +460,13 @@ public partial class ModelConfig
         if (supportFunction != null) exp &= _.SupportFunction == supportFunction;
         if (supportVision != null) exp &= _.SupportVision == supportVision;
         if (supportAudio != null) exp &= _.SupportAudio == supportAudio;
+        if (supportSpeech != null) exp &= _.SupportSpeech == supportSpeech;
         if (supportImage != null) exp &= _.SupportImage == supportImage;
         if (supportVideo != null) exp &= _.SupportVideo == supportVideo;
         if (supportEmbedding != null) exp &= _.SupportEmbedding == supportEmbedding;
+        if (supportRerank != null) exp &= _.SupportRerank == supportRerank;
+        if (enablePromptCache != null) exp &= _.EnablePromptCache == enablePromptCache;
+        if (locked != null) exp &= _.Locked == locked;
         if (enable != null) exp &= _.Enable == enable;
         exp &= _.UpdateTime.Between(start, end);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
@@ -424,7 +494,7 @@ public partial class ModelConfig
         /// <summary>上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）</summary>
         public static readonly Field UpstreamModel = FindByName("UpstreamModel");
 
-        /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
+        /// <summary>上下文。模型支持的上下文窗口大小（令牌数）</summary>
         public static readonly Field ContextLength = FindByName("ContextLength");
 
         /// <summary>思考。是否支持思考模式</summary>
@@ -439,6 +509,9 @@ public partial class ModelConfig
         /// <summary>音频。是否支持音频输入输出</summary>
         public static readonly Field SupportAudio = FindByName("SupportAudio");
 
+        /// <summary>语音合成。是否支持语音合成/音频输出（TTS）</summary>
+        public static readonly Field SupportSpeech = FindByName("SupportSpeech");
+
         /// <summary>图像。是否支持文生图</summary>
         public static readonly Field SupportImage = FindByName("SupportImage");
 
@@ -448,8 +521,20 @@ public partial class ModelConfig
         /// <summary>嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</summary>
         public static readonly Field SupportEmbedding = FindByName("SupportEmbedding");
 
+        /// <summary>重排序。是否支持重排序接口，用于RAG场景</summary>
+        public static readonly Field SupportRerank = FindByName("SupportRerank");
+
+        /// <summary>推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持</summary>
+        public static readonly Field ReasoningEfforts = FindByName("ReasoningEfforts");
+
+        /// <summary>提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本</summary>
+        public static readonly Field EnablePromptCache = FindByName("EnablePromptCache");
+
         /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
         public static readonly Field SystemPrompt = FindByName("SystemPrompt");
+
+        /// <summary>模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释</summary>
+        public static readonly Field Settings = FindByName("Settings");
 
         /// <summary>角色组。逗号分隔的角色ID列表，为空时不限制</summary>
         public static readonly Field RoleIds = FindByName("RoleIds");
@@ -465,6 +550,9 @@ public partial class ModelConfig
 
         /// <summary>排序。越大越靠前</summary>
         public static readonly Field Sort = FindByName("Sort");
+
+        /// <summary>锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改</summary>
+        public static readonly Field Locked = FindByName("Locked");
 
         /// <summary>创建用户</summary>
         public static readonly Field CreateUserID = FindByName("CreateUserID");
@@ -508,7 +596,7 @@ public partial class ModelConfig
         /// <summary>上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）</summary>
         public const String UpstreamModel = "UpstreamModel";
 
-        /// <summary>上下文长度。模型支持的上下文窗口大小（令牌数）</summary>
+        /// <summary>上下文。模型支持的上下文窗口大小（令牌数）</summary>
         public const String ContextLength = "ContextLength";
 
         /// <summary>思考。是否支持思考模式</summary>
@@ -523,6 +611,9 @@ public partial class ModelConfig
         /// <summary>音频。是否支持音频输入输出</summary>
         public const String SupportAudio = "SupportAudio";
 
+        /// <summary>语音合成。是否支持语音合成/音频输出（TTS）</summary>
+        public const String SupportSpeech = "SupportSpeech";
+
         /// <summary>图像。是否支持文生图</summary>
         public const String SupportImage = "SupportImage";
 
@@ -532,8 +623,20 @@ public partial class ModelConfig
         /// <summary>嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景</summary>
         public const String SupportEmbedding = "SupportEmbedding";
 
+        /// <summary>重排序。是否支持重排序接口，用于RAG场景</summary>
+        public const String SupportRerank = "SupportRerank";
+
+        /// <summary>推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持</summary>
+        public const String ReasoningEfforts = "ReasoningEfforts";
+
+        /// <summary>提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本</summary>
+        public const String EnablePromptCache = "EnablePromptCache";
+
         /// <summary>系统提示词。模型级System Prompt，发送给上游的系统消息</summary>
         public const String SystemPrompt = "SystemPrompt";
+
+        /// <summary>模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释</summary>
+        public const String Settings = "Settings";
 
         /// <summary>角色组。逗号分隔的角色ID列表，为空时不限制</summary>
         public const String RoleIds = "RoleIds";
@@ -549,6 +652,9 @@ public partial class ModelConfig
 
         /// <summary>排序。越大越靠前</summary>
         public const String Sort = "Sort";
+
+        /// <summary>锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改</summary>
+        public const String Locked = "Locked";
 
         /// <summary>创建用户</summary>
         public const String CreateUserID = "CreateUserID";

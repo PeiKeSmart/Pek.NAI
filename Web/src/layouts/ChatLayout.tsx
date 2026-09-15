@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState, useRef } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Icon } from '@/components/common/Icon'
@@ -30,6 +30,9 @@ interface ChatLayoutProps {
   onFileDrop?: (file: File) => void
   userName?: string
   userAvatar?: string
+  supportText?: string
+  supportUrl?: string
+  supportPosition?: number
   className?: string
 }
 
@@ -55,6 +58,9 @@ export function ChatLayout({
   onFileDrop,
   userName,
   userAvatar,
+  supportText,
+  supportUrl,
+  supportPosition = 0,
   className,
 }: ChatLayoutProps) {
   const { t } = useTranslation()
@@ -72,7 +78,7 @@ export function ChatLayout({
   }, [])
 
   // 移动端初始化时自动收起侧边栏
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isMobile) {
       useUIStore.getState().setSidebarCollapsed(true)
     }
@@ -116,7 +122,7 @@ export function ChatLayout({
 
   return (
     <div
-      className={cn('h-screen flex overflow-hidden bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100', className)}
+      className={cn('h-full h-dvh flex overflow-hidden bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100', className)}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
@@ -168,10 +174,13 @@ export function ChatLayout({
           collapsed={isMobile ? false : sidebarCollapsed}
           userName={userName}
           userAvatar={userAvatar}
+          supportText={supportPosition === 1 || supportPosition === 2 ? supportText : undefined}
+          supportUrl={supportPosition === 1 || supportPosition === 2 ? supportUrl : undefined}
+          supportPosition={supportPosition}
         />
       </div>
 
-      <main className="flex-1 relative flex flex-col h-full bg-background-light dark:bg-background-dark">
+      <main className="flex-1 min-w-0 relative flex flex-col h-full bg-background-light dark:bg-background-dark">
         <div className="flex items-center px-4 pt-3 pb-1 z-10 min-w-0 overflow-hidden">
           {(sidebarCollapsed || isMobile) && (
             <button
@@ -189,6 +198,19 @@ export function ChatLayout({
           )}
         </div>
         {children}
+        {/* 客服悬浮球 */}
+        {supportText && supportPosition === 3 && (
+          <a
+            href={supportUrl ?? '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 group text-sm text-gray-600 dark:text-gray-300 hover:text-primary"
+            title={supportText}
+          >
+            <Icon name="help" size="base" className="text-primary" />
+            <span className="max-w-0 overflow-hidden group-hover:max-w-[200px] transition-[max-width] duration-300 whitespace-nowrap">{supportText}</span>
+          </a>
+        )}
       </main>
     </div>
   )

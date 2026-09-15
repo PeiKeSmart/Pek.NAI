@@ -1,12 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife.AI.Handlers;
 using NewLife.AI.Tools;
 using NewLife.ChatAI.Entity;
 using NewLife.ChatAI.Handlers;
+using NewLife.ChatAI.Services;
+using NewLife.Log;
 using Xunit;
 
 namespace XUnitTest.Handlers;
@@ -21,7 +24,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnBefore—skillService 为 null 时立即返回")]
     public async Task OnBefore_NullSkillService_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         var ctx = BuildContext();
 
         await handler.OnBefore(ctx, CancellationToken.None);
@@ -34,7 +37,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnBefore—非 MessageFlowContext 且 skillService=null 时正常返回")]
     public async Task OnBefore_NotFlowContext_SkillServiceNull_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         // SkillActivationHandler 先检查 skillService == null，再检查 MessageFlowContext
         await handler.OnBefore(new FakeContext(), CancellationToken.None);
     }
@@ -47,7 +50,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnAfter—skillService 为 null 时立即返回")]
     public async Task OnAfter_NullSkillService_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         var ctx = BuildContext();
         ctx.SkillId = 1;
         ctx.UserId = 100;
@@ -59,7 +62,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnAfter—SkillId == 0 时立即返回（无技能激活）")]
     public async Task OnAfter_SkillIdZero_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         var ctx = BuildContext();
         ctx.SkillId = 0;
         ctx.UserId = 100;
@@ -71,7 +74,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnAfter—UserId == 0 时立即返回（匿名用户）")]
     public async Task OnAfter_UserIdZero_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         var ctx = BuildContext();
         ctx.SkillId = 5;
         ctx.UserId = 0;
@@ -83,7 +86,7 @@ public class SkillActivationHandlerTests
     [DisplayName("OnAfter—HasError=true 时立即返回")]
     public async Task OnAfter_HasError_ReturnsImmediately()
     {
-        var handler = new SkillActivationHandler([], null);
+        var handler = new SkillActivationHandler(null);
         var ctx = BuildContext();
         ctx.SkillId = 5;
         ctx.UserId = 100;
@@ -101,7 +104,7 @@ public class SkillActivationHandlerTests
     public void ResolveSkillByContent_BaseClass_NoOp()
     {
         // 通过可访问的子类包装暴露 protected 方法
-        var handler = new ExposedSkillActivationHandler([], null);
+        var handler = new ExposedSkillActivationHandler(null);
         var ctx = BuildContext();
         ctx.SkillId = 0;
 
@@ -133,10 +136,11 @@ public class SkillActivationHandlerTests
         public IList<AiChatMessage> ContextMessages { get; set; } = new List<AiChatMessage>();
         public String? SystemPrompt { get; set; }
         public Action<String>? OnSystemReady { get; set; }
+        public IList<String> SystemSegments { get; } = new List<String>();
+        public IList<String> TailSegments { get; } = new List<String>();
         public ISet<String> SelectedTools { get; } = new HashSet<String>();
         public ISet<String> AvailableToolNames { get; } = new HashSet<String>();
-        public Int32 MaxTokens { get; set; }
-        public Double? Temperature { get; set; }
+        public ChatOptions Options { get; set; } = new();
         public String? FinishReason { get; set; }
         public System.Text.StringBuilder ContentBuilder { get; } = new();
         public System.Text.StringBuilder ThinkingBuilder { get; } = new();
@@ -148,8 +152,8 @@ public class SkillActivationHandlerTests
         public String? CancelCode { get; set; }
         public String? CancelMessage { get; set; }
         public ChatFlowSource Source { get; set; } = ChatFlowSource.Web;
-        public Boolean PersistMessages { get; set; } = true;
         public IDictionary<String, Object?> Items { get; } = new Dictionary<String, Object?>(StringComparer.OrdinalIgnoreCase);
+        public IList<ISkill> ActivatedSkills => [];
         public Object? this[String key]
         {
             get => Items.TryGetValue(key, out var v) ? v : null;
@@ -158,12 +162,45 @@ public class SkillActivationHandlerTests
     }
 
     /// <summary>暴露 protected ResolveSkillByContent 供测试调用</summary>
-    private sealed class ExposedSkillActivationHandler(
-        IEnumerable<IToolProvider> toolProviders,
-        SkillService? skillService)
-        : SkillActivationHandler(toolProviders, skillService)
+    private sealed class ExposedSkillActivationHandler(SkillService? skillService)
+        : SkillActivationHandler(skillService)
     {
         public void ExposedResolveSkillByContent(IChatContext context, String? content)
             => ResolveSkillByContent(context, content);
+
+        public String ExposedBuildSkillCatalog(SkillService svc)
+            => BuildSkillCatalog(svc);
     }
+
+    /// <summary>覆盖 GetAllSkills 的可测试 SkillService，使用内存数据</summary>
+    private sealed class TestableSkillService(IList<Skill> skills)
+        : SkillService(NewLife.ChatAI.ChatSetting.Current, Logger.Null)
+    {
+        public override IList<Skill> GetAllSkills(String? category = null) =>
+            skills.Where(e => e.Enable).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
+    }
+
+    #region BuildSkillCatalog — 系统技能不入目录
+
+    [Fact]
+    [DisplayName("BuildSkillCatalog—系统技能不列入目录，普通技能正常列出")]
+    public void BuildSkillCatalog_SystemSkillsExcluded()
+    {
+        var handler = new ExposedSkillActivationHandler(null);
+        var svc = new TestableSkillService(new List<Skill>
+        {
+            new() { Id = 1, Code = "star-vision", Name = "愿景理念", IsSystem = true, Enable = true, Sort = 100 },
+            new() { Id = 2, Code = "translator", Name = "翻译助手", IsSystem = false, Enable = true, Sort = 80 },
+            new() { Id = 3, Code = "ppt-slide", Name = "PPT单页", IsSystem = false, Enable = true, Sort = 10 },
+        });
+
+        var catalog = handler.ExposedBuildSkillCatalog(svc);
+
+        Assert.Contains("translator/翻译助手", catalog);
+        Assert.Contains("ppt-slide/PPT单页", catalog);
+        Assert.DoesNotContain("star-vision", catalog);
+        Assert.DoesNotContain("愿景理念", catalog);
+    }
+
+    #endregion
 }

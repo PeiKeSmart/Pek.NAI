@@ -2,15 +2,11 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.IO;
 using System.Linq;
-using System.Net.WebSockets;
 using System.Threading;
 using System.Threading.Tasks;
-using NewLife;
 using NewLife.AI.Clients;
 using NewLife.AI.Clients.DashScope;
-using NewLife.AI.Models;
 using Xunit;
 using Xunit.Sdk;
 using XUnitTest.Helpers;
@@ -33,7 +29,7 @@ public class DashScopeOmniIntegrationTests
 
     public DashScopeOmniIntegrationTests()
     {
-        _apiKey = DashScopeIntegrationTests.LoadApiKey() ?? "";
+        _apiKey = DashScopeKeyLoader.LoadApiKey() ?? "";
     }
 
     private AiClientOptions CreateOptions() => new() { ApiKey = _apiKey };
@@ -152,7 +148,7 @@ public class DashScopeOmniIntegrationTests
         };
 
         using var client = new DashScopeChatClient(CreateOptions());
-        var response = await client.GetResponseAsync(request);
+        var response = await client.GetResponseAsync(request, cancellationToken: default);
 
         Assert.NotNull(response);
         Assert.False(String.IsNullOrWhiteSpace(response.Text));
@@ -168,9 +164,9 @@ public class DashScopeOmniIntegrationTests
             Messages = [new ChatMessage { Role = "user", Content = "说 Hello" }],
             MaxTokens = 50,
         };
-        // 请求音频输出
+        // 请求音频输出。音色使用官方文档默认 Tina（Cherry 不被 qwen3.5-omni-flash 支持）
         request["OmniModalities"] = new[] { "text", "audio" };
-        request["OmniVoice"] = "Cherry";
+        request["OmniVoice"] = "Tina";
         request["OmniAudioFormat"] = "wav";
 
         using var client = new DashScopeChatClient(CreateOptions());
@@ -194,7 +190,7 @@ public class DashScopeOmniIntegrationTests
         };
 
         using var client = new DashScopeChatClient(CreateOptions());
-        var response = await client.GetResponseAsync(request);
+        var response = await client.GetResponseAsync(request, cancellationToken: default);
 
         Assert.NotNull(response);
         Assert.False(String.IsNullOrWhiteSpace(response.Text));
@@ -213,7 +209,7 @@ public class DashScopeOmniIntegrationTests
         request["EnableSearch"] = true;
 
         using var client = new DashScopeChatClient(CreateOptions());
-        var response = await client.GetResponseAsync(request);
+        var response = await client.GetResponseAsync(request, cancellationToken: default);
 
         Assert.NotNull(response);
         Assert.False(String.IsNullOrWhiteSpace(response.Text));
@@ -242,7 +238,7 @@ public class DashScopeOmniIntegrationTests
         };
 
         using var client = new DashScopeChatClient(CreateOptions());
-        var response = await client.GetResponseAsync(request);
+        var response = await client.GetResponseAsync(request, cancellationToken: default);
 
         Assert.NotNull(response);
         Assert.False(String.IsNullOrWhiteSpace(response.Text));

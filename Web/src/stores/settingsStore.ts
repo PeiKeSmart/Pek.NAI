@@ -40,7 +40,7 @@ const defaults: UserSettings = {
   sendShortcut: 'Enter',
   defaultModel: 0,
   defaultThinkingMode: 0,
-  contextRounds: 10,
+  contextRounds: 20,
   nickname: '',
   userBackground: '',
   responseStyle: 0,
@@ -50,7 +50,7 @@ const defaults: UserSettings = {
   allowTraining: false,
   enableLearning: true,
   contentWidth: 960,
-  thinkingCollapsed: false,
+  thinkingLayout: 0,
 }
 
 export const useSettingsStore = create<SettingsState>()(

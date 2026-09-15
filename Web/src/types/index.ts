@@ -54,6 +54,7 @@ export interface ModelInfo {
   supportFunction?: boolean
   supportVision?: boolean
   supportAudio?: boolean
+  supportSpeech?: boolean
   supportImage?: boolean
   supportVideo?: boolean
   contextLength?: number
@@ -65,6 +66,20 @@ export interface Attachment {
   size: number
   type: 'pdf' | 'image' | 'file'
   previewUrl?: string
+}
+
+/** 五维度详细评分 */
+export interface MessageRating {
+  id?: number
+  accuracy: number
+  completeness: number
+  usefulness: number
+  expressionQuality: number
+  creativity: number
+  overall: number
+  suggestion?: string
+  tags?: string
+  result?: string
 }
 
 export interface UserSettings {
@@ -85,7 +100,8 @@ export interface UserSettings {
   enableLearning: boolean
   defaultSkill?: string
   contentWidth?: number
-  thinkingCollapsed?: boolean
+  /** 推理过程布局。0=默认(上方折叠) 1=上方折叠 2=上方展开 3=右侧分栏 */
+  thinkingLayout?: number
 }
 
 
@@ -113,7 +129,10 @@ export interface ModelManageItem {
   supportFunction: boolean
   supportVision: boolean
   supportAudio: boolean
+  supportSpeech: boolean
   supportImage: boolean
   supportVideo: boolean
+  supportRerank?: boolean
+  locked?: boolean
   remark?: string
 }

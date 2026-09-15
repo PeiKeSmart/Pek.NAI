@@ -28,3 +28,31 @@ export function formatExactTime(dateStr: string): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
+
+/**
+ * 创建带超时的 AbortSignal
+ * AbortSignal.timeout 的低版本浏览器兼容垫片
+ */
+export function withTimeout(ms: number): AbortSignal {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function')
+    return AbortSignal.timeout(ms)
+
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(new DOMException('Timeout', 'TimeoutError')), ms)
+  return controller.signal
+}
+
+/**
+ * 平滑滚动到元素（Safari < 15.4 兼容垫片）
+ *
+ * scrollIntoView({ behavior: 'smooth' }) 在 Safari 15.4+ / Chrome 61+ 才支持。
+ * 低版本浏览器降级为瞬间跳转，避免静默失败。
+ */
+export function smoothScrollIntoView(el: HTMLElement, options?: ScrollIntoViewOptions): void {
+  try {
+    el.scrollIntoView({ behavior: 'smooth', ...options })
+  } catch {
+    // 降级：瞬间跳转
+    el.scrollIntoView(options?.block === 'center')
+  }
+}

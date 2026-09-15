@@ -19,7 +19,7 @@ namespace NewLife.AI.Clients.OpenAI;
 /// <remarks>用连接选项初始化新生命 AI 客户端</remarks>
 /// <param name="options">连接选项（Endpoint、ApiKey、Model 等）</param>
 [AiClient("NewLifeAI", "新生命AI", "https://ai.newlifex.com", Description = "新生命团队星语 AI 网关，统一对接多种大模型")]
-[AiClientModel("qwen3.5-flash", "Qwen3.5 Flash", Thinking = true)]
+[AiClientModel("qwen3.6-flash", "Qwen3.6 Flash", Thinking = true)]
 public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(options), IRerankClient
 {
     #region 属性
@@ -90,14 +90,18 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
 
-            if (!line.StartsWith("data: ")) continue;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var data = line.Substring(6).Trim();
+            var data = line.Substring(5).Trim();
             if (data == "[DONE]") break;
             if (data.Length == 0) continue;
 
+            // 流式错误识别，避免静默吞掉
+            EnsureNoStreamError(data, Name);
+
             IChatResponse? chunk = null;
-            try { chunk = data.ToJsonEntity<AnthropicStreamEvent>(JsonOptions)?.ToChunkResponse(request.Model); } catch { }
+            try { chunk = data.ToJsonEntity<AnthropicStreamEvent>(JsonOptions)?.ToChunkResponse(request.Model); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
             if (chunk != null) yield return chunk;
         }
     }
@@ -120,7 +124,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
         var responseText = await PostAsync(url, bodyJson, request, _options, cancellationToken).ConfigureAwait(false);
         // 同理，Gemini 响应字段（candidates/finishReason/usageMetadata）也是 camelCase，需用 Gemini JsonOptions 反序列化
         var resp = responseText.ToJsonEntity<GeminiResponse>(GeminiChatClient.DefaultJsonOptions)!;
-        resp.Model = request.Model;
+        resp.Model ??= request.Model;
         return resp;
     }
 
@@ -147,20 +151,23 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
 
-            if (!line.StartsWith("data: ")) continue;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var data = line.Substring(6).Trim();
+            var data = line.Substring(5).Trim();
             if (data == "[DONE]") break;
             if (data.Length == 0) continue;
+
+            // 流式错误识别，避免静默吞掉
+            EnsureNoStreamError(data, Name);
 
             IChatResponse? chunk = null;
             try
             {
                 // Gemini 流式块字段（candidates/finishReason）为 camelCase，用 Gemini JsonOptions 反序列化
                 var resp = data.ToJsonEntity<GeminiResponse>(GeminiChatClient.DefaultJsonOptions);
-                if (resp != null) { resp.Model = request.Model; chunk = resp; }
+                if (resp != null) { resp.Model ??= request.Model; chunk = resp; }
             }
-            catch { }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
             if (chunk != null) yield return chunk;
         }
     }
@@ -177,7 +184,7 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
     /// <summary>图像生成（简便重载）。POST /v1/images/generations</summary>
     /// <param name="prompt">图像描述提示词</param>
     /// <param name="model">模型名称，为 null 时使用默认</param>
-    /// <param name="size">图像尺寸，如 "1024x1024"，为 null 时使用服务端默认</param>
+    /// <param name="size">图像尺寸，如 "1024*1024"，为 null 时使用服务端默认</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>图像生成响应</returns>
     public virtual Task<ImageGenerationResponse?> ImageGenerationsAsync(String prompt, String? model = null, String? size = null, CancellationToken cancellationToken = default)
@@ -349,14 +356,16 @@ public class NewLifeAIChatClient(AiClientOptions options) : OpenAIChatClient(opt
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
 
-            if (!line.StartsWith("data: ")) continue;
+            // 兼容 data: 与 data: （部分服务商省略空格）
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var data = line.Substring(6).Trim();
+            var data = line.Substring(5).Trim();
             if (data == "[DONE]") break;
             if (data.Length == 0) continue;
 
             IChatResponse? chunk = null;
-            try { chunk = ParseResponse(data, request); } catch { }
+            try { chunk = ParseResponse(data, request); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
             if (chunk != null) yield return chunk;
         }
     }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
@@ -21,7 +21,7 @@ public class ToolRegistryExtendedTests
     {
         var registry = new ToolRegistry();
         Assert.Throws<ArgumentNullException>(() =>
-            registry.AddTool(null!, static (_, _) => Task.FromResult("ok")));
+            registry.AddTool(null!, static (_, _, _) => Task.FromResult("ok")));
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class ToolRegistryExtendedTests
     public void AddTool_RegisteredToolAppearsInList()
     {
         var registry = new ToolRegistry();
-        registry.AddTool("my_tool", static (_, _) => Task.FromResult("result"), "描述");
+        registry.AddTool("my_tool", static (_, _, _) => Task.FromResult("result"), "描述");
 
         Assert.Single(registry.Tools);
         Assert.Equal("my_tool", registry.Tools[0].Function!.Name);
@@ -107,6 +107,35 @@ public class ToolRegistryExtendedTests
             registry.InvokeAsync("nonexistent", null));
     }
 
+    // ── AddToolAlias（工具名别名）──────────────────────────────────────────
+
+    [Fact]
+    [DisplayName("AddToolAlias—别名可路由到目标工具")]
+    public async Task AddToolAlias_RoutesToTarget()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTool("run_sql", static (_, _, _) => Task.FromResult("执行成功"));
+        registry.AddToolAlias("query_sql", "run_sql");
+
+        var result = await registry.InvokeAsync("query_sql", "{}");
+
+        Assert.Equal("执行成功", result);
+    }
+
+    [Fact]
+    [DisplayName("InvokeAsync—未注册工具错误信息含相近工具建议")]
+    public async Task InvokeAsync_UnknownTool_MessageContainsSuggestion()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTool("run_sql", static (_, _, _) => Task.FromResult("ok"));
+
+        var ex = await Assert.ThrowsAsync<System.Collections.Generic.KeyNotFoundException>(() =>
+            registry.InvokeAsync("run_sqll", null));
+
+        Assert.Contains("run_sql", ex.Message);
+        Assert.Contains("可用工具", ex.Message);
+    }
+
     [Fact]
     [DisplayName("InvokeAsync—调用 calculate 工具返回正确结果")]
     public async Task InvokeAsync_Calculate_ReturnsResult()
@@ -171,5 +200,167 @@ public class ToolRegistryExtendedTests
         // 再次注册同一实例，不应增加重复条目
         registry.AddTools(new BuiltinToolService());
         Assert.Equal(countBefore, registry.Tools.Count);
+    }
+
+    // ── LLM 数组参数兼容 ──────────────────────────────────────────────────
+
+    /// <summary>测试用数组参数工具服务，验证 LLM 将 String[] 以 JSON 字符串形式传递时的兼容性</summary>
+    private sealed class ArrayParamToolService
+    {
+        /// <summary>接收两个字符串数组参数，返回合并结果</summary>
+        /// <param name="firsts">第一个城市列表</param>
+        /// <param name="lasts">第二个城市列表</param>
+        [ToolDescription("merge_cities")]
+        [DisplayName("合并城市列表")]
+        [Description("将两个城市列表合并为一个")]
+        public String MergeCities(
+            [Description("第一个城市列表")] String[] firsts,
+            [Description("第二个城市列表")] String[] lasts)
+        {
+            return String.Join(",", firsts) + "|" + String.Join(",", lasts);
+        }
+
+        /// <summary>接收一个整型数组参数</summary>
+        [ToolDescription("sum_numbers")]
+        [DisplayName("数组求和")]
+        [Description("对整型数组求和")]
+        public Int32 SumNumbers([Description("数值列表")] Int32[] numbers)
+        {
+            var sum = 0;
+            foreach (var n in numbers) sum += n;
+            return sum;
+        }
+
+        /// <summary>接收一个 List 参数</summary>
+        [ToolDescription("concat_tags")]
+        [DisplayName("连接标签")]
+        [Description("将标签列表连接成字符串")]
+        public String ConcatTags([Description("标签列表")] System.Collections.Generic.List<String> tags)
+        {
+            return String.Join(",", tags);
+        }
+    }
+
+    [Fact]
+    [DisplayName("String[] 参数—JSON 数组字符串兼容（如 \"[\"上海\"]\"）")]
+    public async Task StringArray_FromJsonString_Works()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ArrayParamToolService());
+
+        // LLM 将 String[] 参数传成 JSON 字符串（外层 JSON 值被解析为字符串）
+        var result = await registry.InvokeAsync("merge_cities",
+            "{\"firsts\":\"[\\\"上海\\\"]\",\"lasts\":\"[\\\"武汉\\\",\\\"济南\\\"]\"}");
+
+        Assert.Equal("上海|武汉,济南", result);
+    }
+
+    [Fact]
+    [DisplayName("String[] 参数—正常 JSON 数组（非字符串）保持正常")]
+    public async Task StringArray_FromNormalArray_Works()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ArrayParamToolService());
+
+        // 正常情况：LLM 正确传递数组
+        var result = await registry.InvokeAsync("merge_cities",
+            "{\"firsts\":[\"上海\"],\"lasts\":[\"武汉\",\"济南\"]}");
+
+        Assert.Equal("上海|武汉,济南", result);
+    }
+
+    [Fact]
+    [DisplayName("Int32[] 参数—JSON 数组字符串兼容")]
+    public async Task Int32Array_FromJsonString_Works()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ArrayParamToolService());
+
+        var result = await registry.InvokeAsync("sum_numbers",
+            "{\"numbers\":\"[1, 2, 3, 4, 5]\"}");
+
+        Assert.Equal("15", result);
+    }
+
+    [Fact]
+    [DisplayName("List<String> 参数—JSON 数组字符串兼容")]
+    public async Task ListString_FromJsonString_Works()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ArrayParamToolService());
+
+        var result = await registry.InvokeAsync("concat_tags",
+            "{\"tags\":\"[\\\"AI\\\",\\\"Chat\\\",\\\"Tool\\\"]\"}");
+
+        Assert.Equal("AI,Chat,Tool", result);
+    }
+
+    // ── 工具特性继承（ToolDescriptionAttribute Inherited=true）────────────
+
+    /// <summary>抽象工具基类：标注 ToolDescription，验证子类继承注册</summary>
+    private abstract class BaseTool
+    {
+        [ToolDescription("base_tool")]
+        [Description("基类工具")]
+        public String BaseToolMethod(String input) => $"base:{input}";
+    }
+
+    /// <summary>继承基类的具体工具（非 override，直接复用基类方法）</summary>
+    private sealed class DerivedTool : BaseTool
+    {
+        [ToolDescription("derived_tool")]
+        [Description("子类工具")]
+        public String DerivedToolMethod(Int32 count) => $"derived:{count}";
+    }
+
+    /// <summary>基类工具方法为 virtual，子类 override 自定义实现（不重复标注特性，依赖 inherit 解析）</summary>
+    private abstract class OverrideBaseTool
+    {
+        [ToolDescription("shared_tool")]
+        [Description("共享工具")]
+        public virtual String CustomSharedTool(String input) => $"base:{input}";
+    }
+
+    /// <summary>override 基类工具方法</summary>
+    private sealed class OverrideDerivedTool : OverrideBaseTool
+    {
+        public override String CustomSharedTool(String input) => $"derived:{input}";
+    }
+
+    [Fact]
+    [DisplayName("继承—子类实例注册包含继承的基类工具方法")]
+    public void AddTools_DerivedClass_InheritsBaseToolMethod()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new DerivedTool());
+
+        var names = new System.Collections.Generic.HashSet<String>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in registry.Tools)
+            names.Add(t.Function!.Name);
+
+        Assert.Contains("base_tool", names);
+        Assert.Contains("derived_tool", names);
+    }
+
+    [Fact]
+    [DisplayName("继承—override 方法通过 inherit:true 解析基类工具名")]
+    public void BuildFromMethod_OverrideMethod_ResolvesBaseAttribute()
+    {
+        var method = typeof(OverrideDerivedTool).GetMethod("CustomSharedTool")!;
+        var tool = ToolSchemaBuilder.BuildFromMethod(method);
+
+        // 特性名 shared_tool 优先；若无 inherit:true 则回退为方法名 custom_shared_tool
+        Assert.Equal("shared_tool", tool.Function!.Name);
+    }
+
+    [Fact]
+    [DisplayName("继承—注册的继承工具调用子类 override 实现")]
+    public async Task AddTools_OverrideDerived_InvokesDerivedImplementation()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new OverrideDerivedTool());
+
+        var result = await registry.InvokeAsync("shared_tool", "{\"input\":\"hi\"}");
+        Assert.Equal("derived:hi", result);
     }
 }

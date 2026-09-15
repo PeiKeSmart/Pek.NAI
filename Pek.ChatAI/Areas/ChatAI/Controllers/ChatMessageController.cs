@@ -1,5 +1,4 @@
-﻿using NewLife.AI.Models;
-using NewLife.Cube;
+﻿using NewLife.Cube;
 using NewLife.Cube.Extensions;
 using NewLife.Cube.ViewModels;
 using NewLife.Web;
@@ -9,7 +8,7 @@ using ChatMessage = NewLife.ChatAI.Entity.ChatMessage;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>对话消息。会话中的单条发言，包括用户消息和AI回复</summary>
-[Menu(150, false, Icon = "fa-table")]
+[Menu(9998, false, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class ChatMessageController : ChatEntityController<ChatMessage>
 {
@@ -17,7 +16,7 @@ public class ChatMessageController : ChatEntityController<ChatMessage>
     {
         //LogOnChange = true;
 
-        //ListFields.RemoveField("Id", "Creator");
+        ListFields.RemoveField("Id", "MaxTokens", "Temperature", "Feedback*");
         ListFields.RemoveCreateField().RemoveRemarkField();
 
         //{
@@ -49,6 +48,6 @@ public class ChatMessageController : ChatEntityController<ChatMessage>
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return ChatMessage.Search(conversationId, thinkingMode, feedbackType, start, end, p["Q"], p);
+        return ChatMessage.Search(conversationId, thinkingMode, feedbackType, null, start, end, p["Q"], p);
     }
 }

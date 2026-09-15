@@ -31,6 +31,22 @@ public partial class Skill
     [BindColumn("Id", "编号", "")]
     public Int32 Id { get => _Id; set { if (OnPropertyChanging("Id", value)) { _Id = value; OnPropertyChanged("Id"); } } }
 
+    private Int32 _UserId;
+    /// <summary>用户。0=全局，>0=个人技能。开源版仅支持全局技能</summary>
+    [DisplayName("用户")]
+    [Description("用户。0=全局，>0=个人技能。开源版仅支持全局技能")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("UserId", "用户。0=全局，>0=个人技能。开源版仅支持全局技能", "", DefaultValue = "0")]
+    public Int32 UserId { get => _UserId; set { if (OnPropertyChanging("UserId", value)) { _UserId = value; OnPropertyChanged("UserId"); } } }
+
+    private Int32 _ProjectId;
+    /// <summary>项目。0=个人/系统，>0=该项目专属技能。开源版仅支持全局技能</summary>
+    [DisplayName("项目")]
+    [Description("项目。0=个人/系统，>0=该项目专属技能。开源版仅支持全局技能")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("ProjectId", "项目。0=个人/系统，>0=该项目专属技能。开源版仅支持全局技能", "", DefaultValue = "0")]
+    public Int32 ProjectId { get => _ProjectId; set { if (OnPropertyChanging("ProjectId", value)) { _ProjectId = value; OnPropertyChanged("ProjectId"); } } }
+
     private String? _Code;
     /// <summary>编码。英文标识，唯一，如coder、translator</summary>
     [DisplayName("编码")]
@@ -87,22 +103,6 @@ public partial class Skill
     [BindColumn("Triggers", "触发词。逗号分隔的关键词列表，用户消息包含任一词时自动激活该技能，如：翻译,translate,帮我译", "")]
     public String? Triggers { get => _Triggers; set { if (OnPropertyChanging("Triggers", value)) { _Triggers = value; OnPropertyChanged("Triggers"); } } }
 
-    private String? _ContinueHints;
-    /// <summary>延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段</summary>
-    [DisplayName("延续提示词")]
-    [Description("延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段")]
-    [DataObjectField(false, false, true, 200)]
-    [BindColumn("ContinueHints", "延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段", "")]
-    public String? ContinueHints { get => _ContinueHints; set { if (OnPropertyChanging("ContinueHints", value)) { _ContinueHints = value; OnPropertyChanged("ContinueHints"); } } }
-
-    private String? _ExitHints;
-    /// <summary>退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题</summary>
-    [DisplayName("退出提示词")]
-    [Description("退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题")]
-    [DataObjectField(false, false, true, 200)]
-    [BindColumn("ExitHints", "退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题", "")]
-    public String? ExitHints { get => _ExitHints; set { if (OnPropertyChanging("ExitHints", value)) { _ExitHints = value; OnPropertyChanged("ExitHints"); } } }
-
     private Int32 _Sort;
     /// <summary>排序。越大越靠前</summary>
     [DisplayName("排序")]
@@ -120,12 +120,20 @@ public partial class Skill
     public Boolean Enable { get => _Enable; set { if (OnPropertyChanging("Enable", value)) { _Enable = value; OnPropertyChanged("Enable"); } } }
 
     private Boolean _IsSystem;
-    /// <summary>系统。是否系统内置，内置技能不可删除</summary>
+    /// <summary>系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除</summary>
     [DisplayName("系统")]
-    [Description("系统。是否系统内置，内置技能不可删除")]
+    [Description("系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("IsSystem", "系统。是否系统内置，内置技能不可删除", "")]
+    [BindColumn("IsSystem", "系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除", "")]
     public Boolean IsSystem { get => _IsSystem; set { if (OnPropertyChanging("IsSystem", value)) { _IsSystem = value; OnPropertyChanged("IsSystem"); } } }
+
+    private Boolean _IsPrimary;
+    /// <summary>主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口</summary>
+    [DisplayName("主技能")]
+    [Description("主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("IsPrimary", "主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口", "")]
+    public Boolean IsPrimary { get => _IsPrimary; set { if (OnPropertyChanging("IsPrimary", value)) { _IsPrimary = value; OnPropertyChanged("IsPrimary"); } } }
 
     private Int32 _Version;
     /// <summary>版本。每次编辑自增</summary>
@@ -226,6 +234,8 @@ public partial class Skill
         get => name switch
         {
             "Id" => _Id,
+            "UserId" => _UserId,
+            "ProjectId" => _ProjectId,
             "Code" => _Code,
             "Name" => _Name,
             "Icon" => _Icon,
@@ -233,11 +243,10 @@ public partial class Skill
             "Description" => _Description,
             "Content" => _Content,
             "Triggers" => _Triggers,
-            "ContinueHints" => _ContinueHints,
-            "ExitHints" => _ExitHints,
             "Sort" => _Sort,
             "Enable" => _Enable,
             "IsSystem" => _IsSystem,
+            "IsPrimary" => _IsPrimary,
             "Version" => _Version,
             "CreateUser" => _CreateUser,
             "CreateUserID" => _CreateUserID,
@@ -255,6 +264,8 @@ public partial class Skill
             switch (name)
             {
                 case "Id": _Id = value.ToInt(); break;
+                case "UserId": _UserId = value.ToInt(); break;
+                case "ProjectId": _ProjectId = value.ToInt(); break;
                 case "Code": _Code = Convert.ToString(value); break;
                 case "Name": _Name = Convert.ToString(value); break;
                 case "Icon": _Icon = Convert.ToString(value); break;
@@ -262,11 +273,10 @@ public partial class Skill
                 case "Description": _Description = Convert.ToString(value); break;
                 case "Content": _Content = Convert.ToString(value); break;
                 case "Triggers": _Triggers = Convert.ToString(value); break;
-                case "ContinueHints": _ContinueHints = Convert.ToString(value); break;
-                case "ExitHints": _ExitHints = Convert.ToString(value); break;
                 case "Sort": _Sort = value.ToInt(); break;
                 case "Enable": _Enable = value.ToBoolean(); break;
                 case "IsSystem": _IsSystem = value.ToBoolean(); break;
+                case "IsPrimary": _IsPrimary = value.ToBoolean(); break;
                 case "Version": _Version = value.ToInt(); break;
                 case "CreateUser": _CreateUser = Convert.ToString(value); break;
                 case "CreateUserID": _CreateUserID = value.ToInt(); break;
@@ -321,20 +331,22 @@ public partial class Skill
     /// <summary>高级查询</summary>
     /// <param name="code">编码。英文标识，唯一，如coder、translator</param>
     /// <param name="category">分类。通用/开发/创作/分析</param>
-    /// <param name="isSystem">系统。是否系统内置，内置技能不可删除</param>
+    /// <param name="isSystem">系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除</param>
+    /// <param name="isPrimary">主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口</param>
     /// <param name="enable">启用</param>
     /// <param name="start">更新时间开始</param>
     /// <param name="end">更新时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<Skill> Search(String? code, String? category, Boolean? isSystem, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<Skill> Search(String? code, String? category, Boolean? isSystem, Boolean? isPrimary, Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
         if (!code.IsNullOrEmpty()) exp &= _.Code == code;
         if (!category.IsNullOrEmpty()) exp &= _.Category == category;
         if (isSystem != null) exp &= _.IsSystem == isSystem;
+        if (isPrimary != null) exp &= _.IsPrimary == isPrimary;
         if (enable != null) exp &= _.Enable == enable;
         exp &= _.UpdateTime.Between(start, end);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
@@ -349,6 +361,12 @@ public partial class Skill
     {
         /// <summary>编号</summary>
         public static readonly Field Id = FindByName("Id");
+
+        /// <summary>用户。0=全局，>0=个人技能。开源版仅支持全局技能</summary>
+        public static readonly Field UserId = FindByName("UserId");
+
+        /// <summary>项目。0=个人/系统，>0=该项目专属技能。开源版仅支持全局技能</summary>
+        public static readonly Field ProjectId = FindByName("ProjectId");
 
         /// <summary>编码。英文标识，唯一，如coder、translator</summary>
         public static readonly Field Code = FindByName("Code");
@@ -371,20 +389,17 @@ public partial class Skill
         /// <summary>触发词。逗号分隔的关键词列表，用户消息包含任一词时自动激活该技能，如：翻译,translate,帮我译</summary>
         public static readonly Field Triggers = FindByName("Triggers");
 
-        /// <summary>延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段</summary>
-        public static readonly Field ContinueHints = FindByName("ContinueHints");
-
-        /// <summary>退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题</summary>
-        public static readonly Field ExitHints = FindByName("ExitHints");
-
         /// <summary>排序。越大越靠前</summary>
         public static readonly Field Sort = FindByName("Sort");
 
         /// <summary>启用</summary>
         public static readonly Field Enable = FindByName("Enable");
 
-        /// <summary>系统。是否系统内置，内置技能不可删除</summary>
+        /// <summary>系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除</summary>
         public static readonly Field IsSystem = FindByName("IsSystem");
+
+        /// <summary>主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口</summary>
+        public static readonly Field IsPrimary = FindByName("IsPrimary");
 
         /// <summary>版本。每次编辑自增</summary>
         public static readonly Field Version = FindByName("Version");
@@ -425,6 +440,12 @@ public partial class Skill
         /// <summary>编号</summary>
         public const String Id = "Id";
 
+        /// <summary>用户。0=全局，>0=个人技能。开源版仅支持全局技能</summary>
+        public const String UserId = "UserId";
+
+        /// <summary>项目。0=个人/系统，>0=该项目专属技能。开源版仅支持全局技能</summary>
+        public const String ProjectId = "ProjectId";
+
         /// <summary>编码。英文标识，唯一，如coder、translator</summary>
         public const String Code = "Code";
 
@@ -446,20 +467,17 @@ public partial class Skill
         /// <summary>触发词。逗号分隔的关键词列表，用户消息包含任一词时自动激活该技能，如：翻译,translate,帮我译</summary>
         public const String Triggers = "Triggers";
 
-        /// <summary>延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段</summary>
-        public const String ContinueHints = "ContinueHints";
-
-        /// <summary>退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题</summary>
-        public const String ExitHints = "ExitHints";
-
         /// <summary>排序。越大越靠前</summary>
         public const String Sort = "Sort";
 
         /// <summary>启用</summary>
         public const String Enable = "Enable";
 
-        /// <summary>系统。是否系统内置，内置技能不可删除</summary>
+        /// <summary>系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除</summary>
         public const String IsSystem = "IsSystem";
+
+        /// <summary>主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口</summary>
+        public const String IsPrimary = "IsPrimary";
 
         /// <summary>版本。每次编辑自增</summary>
         public const String Version = "Version";

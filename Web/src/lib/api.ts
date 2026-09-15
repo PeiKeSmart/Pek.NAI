@@ -5,15 +5,30 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 const SSE_MAX_RETRIES = 3
 
+const DRAFT_KEY = 'chat.draft'
+
+/** 跳转登录前保存当前输入框内容到 sessionStorage，避免用户已输入内容因整页跳转而丢失。
+ *  背景：Cookie 认证模式下，token 过期后 API 返回 401，
+ *  整页跳转 SSO 会导致 React 状态全部丢失。 */
+function saveDraftBeforeRedirect() {
+  try {
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement | null
+    const text = textarea?.value?.trim()
+    if (text) {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ text, timestamp: Date.now() }))
+    }
+  } catch { /* 静默忽略 */ }
+}
+
 /** 是否正在跳转登录，防止多次重定向 */
 let isRedirectingToLogin = false
 
-/** 未登录时跳转到登录页，分享页和登录页除外；登录完成后跳回当前地址 */
+/** 未登录时跳转到登录页，登录页除外；登录完成后跳回当前地址 */
 function redirectToLogin() {
   if (isRedirectingToLogin) return
-  if (window.location.pathname.startsWith('/share/')) return
   if (window.location.pathname.toLowerCase().startsWith('/admin/')) return
   isRedirectingToLogin = true
+  saveDraftBeforeRedirect()
   const returnUrl = encodeURIComponent(window.location.href)
   window.location.href = `/Admin/User/Login?r=${returnUrl}`
 }
@@ -35,6 +50,32 @@ async function fetchSSE(
       const res = await fetch(url, init)
       if (!res.ok) {
         if (res.status === 401) redirectToLogin()
+        if (res.status === 403) {
+          try {
+            const body = await res.clone().json()
+            if (body?.code === 'CHAT_FORBIDDEN') {
+              showToast('warning', body.message ?? '您没有发送消息的权限')
+            } else {
+              showToast('warning', '无权限访问该资源')
+            }
+          } catch {
+            showToast('warning', '无权限访问该资源')
+          }
+          throw new DOMException('Forbidden', 'AbortError')
+        }
+        if (res.status === 429) {
+          try {
+            const body = await res.clone().json()
+            if (body?.code === 'QUOTA_EXCEEDED') {
+              showToast('error', body.message ?? '您的用量额度已耗尽，请联系管理员')
+            } else {
+              showToast('error', '请求过于频繁，请稍后再试')
+            }
+          } catch {
+            showToast('error', '请求过于频繁，请稍后再试')
+          }
+          throw new DOMException('Rate limited', 'AbortError')
+        }
         throw new Error(`SSE ${res.status}: ${res.statusText}`)
       }
       const reader = res.body?.getReader()
@@ -102,9 +143,35 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     } else if (res.status === 401) {
       redirectToLogin()
     } else if (res.status === 403) {
-      showToast('warning', '无权限访问该资源')
+      try {
+        const body = await res.clone().json()
+        if (body?.code === 'CHAT_FORBIDDEN') {
+          showToast('warning', body.message ?? '您没有发送消息的权限')
+        } else {
+          showToast('warning', '无权限访问该资源')
+        }
+      } catch {
+        showToast('warning', '无权限访问该资源')
+      }
     } else if (res.status === 429) {
-      showToast('warning', '请求过于频繁，请稍后再试')
+      try {
+        const body = await res.clone().json()
+        if (body?.code === 'QUOTA_EXCEEDED') {
+          showToast('error', body.message ?? '您的用量额度已耗尽，请联系管理员')
+        } else {
+          showToast('error', '请求过于频繁，请稍后再试')
+        }
+      } catch {
+        showToast('error', '请求过于频繁，请稍后再试')
+      }
+    } else if (res.status === 400) {
+      try {
+        const body = await res.clone().json()
+        const msg = typeof body === 'string' ? body : (body?.message || body?.title || '')
+        showToast('error', msg || '请求参数错误')
+      } catch {
+        showToast('error', '请求参数错误')
+      }
     } else if (res.status >= 500) {
       showToast('error', `服务器内部错误 (${res.status})，请稍后重试`)
     } else {
@@ -199,6 +266,16 @@ export async function deleteConversation(id: string): Promise<void> {
   await request<boolean>(`/api/conversations/${id}`, { method: 'DELETE' })
 }
 
+/** 若会话无消息则删除（服务端权威判断），返回是否实际删除 */
+export async function deleteConversationIfEmpty(id: string): Promise<boolean> {
+  try {
+    await request<void>(`/api/conversations/${id}/if-empty`, { method: 'DELETE' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function pinConversation(id: string, isPinned: boolean): Promise<void> {
   await request<boolean>(`/api/conversations/${id}/pin?isPinned=${isPinned}`, {
     method: 'PATCH',
@@ -228,6 +305,7 @@ interface MessageDto {
   outputTokens?: number
   totalTokens?: number
   feedbackType?: number
+  modelName?: string
 }
 
 function toMessage(dto: MessageDto): Message {
@@ -259,6 +337,7 @@ function toMessage(dto: MessageDto): Message {
     } : undefined,
     feedbackType: dto.feedbackType,
     attachments: dto.attachments,
+    model: dto.modelName,
   }
 }
 
@@ -273,14 +352,12 @@ export interface ChatStreamEvent {
   type: 'message_start' | 'thinking_delta' | 'thinking_done' | 'content_delta' | 'tool_call_start' | 'tool_call_done' | 'tool_call_error' | 'message_done' | 'error'
   messageId?: string
   model?: string
-  thinkingMode?: number
   content?: string
   thinkingTime?: number
   toolCallId?: string
   name?: string
   arguments?: string
   result?: string
-  success?: boolean
   error?: string
   code?: string
   message?: string
@@ -394,6 +471,7 @@ interface ModelInfoDto {
   supportFunction: boolean
   supportVision: boolean
   supportAudio: boolean
+  supportSpeech: boolean
   supportImage: boolean
   supportVideo: boolean
   contextLength: number
@@ -410,6 +488,7 @@ export async function fetchModels(): Promise<ModelInfo[]> {
     supportFunction: d.supportFunction,
     supportVision: d.supportVision,
     supportAudio: d.supportAudio,
+    supportSpeech: d.supportSpeech,
     supportImage: d.supportImage,
     supportVideo: d.supportVideo,
     contextLength: d.contextLength || undefined,
@@ -435,7 +514,7 @@ interface UserSettingsDto {
   showToolCalls: boolean
   streamingSpeed: number
   contentWidth: number
-  thinkingCollapsed?: boolean
+  thinkingLayout?: number
   enableLearning: boolean
 }
 
@@ -456,7 +535,7 @@ function toUserSettings(dto: UserSettingsDto): UserSettings {
     showToolCalls: dto.showToolCalls ?? false,
     allowTraining: dto.allowTraining,
     contentWidth: dto.contentWidth || 960,
-    thinkingCollapsed: dto.thinkingCollapsed ?? false,
+    thinkingLayout: dto.thinkingLayout ?? 0,
     enableLearning: dto.enableLearning ?? true,
   }
 }
@@ -476,7 +555,7 @@ export async function saveUserSettings(settings: UserSettings): Promise<UserSett
       sendShortcut: settings.sendShortcut ?? 'Enter',
       defaultModel: settings.defaultModel ?? 0,
       defaultThinkingMode: settings.defaultThinkingMode ?? 0,
-      contextRounds: settings.contextRounds ?? 10,
+      contextRounds: settings.contextRounds ?? 20,
       nickname: settings.nickname ?? '',
       userBackground: settings.userBackground ?? '',
       responseStyle: settings.responseStyle ?? 0,
@@ -485,7 +564,7 @@ export async function saveUserSettings(settings: UserSettings): Promise<UserSett
       mcpEnabled: settings.mcpEnabled,
       showToolCalls: settings.showToolCalls ?? false,
       contentWidth: settings.contentWidth ?? 960,
-      thinkingCollapsed: settings.thinkingCollapsed ?? false,
+      thinkingLayout: settings.thinkingLayout ?? 0,
       enableLearning: settings.enableLearning ?? true,
     }),
   })
@@ -496,11 +575,11 @@ export async function saveUserSettings(settings: UserSettings): Promise<UserSett
 
 export async function createShareLink(
   conversationId: string,
-  expireHours?: number,
+  expireMinutes?: number,
 ): Promise<{ url: string; createTime: string; expireTime?: string }> {
   return request(`/api/conversations/${conversationId}/share`, {
     method: 'POST',
-    body: JSON.stringify({ expireHours }),
+    body: JSON.stringify({ expireMinutes }),
   })
 }
 
@@ -516,12 +595,15 @@ export interface SharedConversationContent {
     role: 'user' | 'assistant'
     content: string
     createdAt: string
-    thinkingContent?: string
-    toolCalls?: Array<{ id: string; name: string; status: string; arguments?: string; result?: string }>
+    modelName?: string
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
   }>
   createTime: string
   expireTime?: string
+  anchorMessageId?: string
+  snapshotTitle?: string
+  creatorName?: string
+  siteTitle?: string
 }
 
 export async function fetchSharedConversation(token: string): Promise<SharedConversationContent | null> {
@@ -706,8 +788,26 @@ export interface SuggestedQuestion {
 export interface SystemConfig {
   appName: string
   siteTitle: string
+  /** Logo地址。欢迎页自定义Logo图片URL，为空时显示默认图标 */
+  logoUrl?: string
+  /** 品牌主色 HEX。空值时前端使用默认 #5B5BFF */
+  themeColor?: string
+  /** 品牌渐变（两个 HEX 逗号分隔，如 "#5B5BFF,#8B5CF6"）。空值时使用默认蓝紫渐变 */
+  brandGradient?: string
   /** 欢迎语。欢迎页大标题，空值时前端使用默认文案 */
   welcomeMessage?: string
+  /** 欢迎副标题。欢迎页大标题下方的引导文案，空值时前端使用默认文案 */
+  welcomeSubtitle?: string
+  /** 客服文本。侧边栏或悬浮球中显示的帮助链接文字，为空时不展示 */
+  supportText?: string
+  /** 客服链接。点击客服文本跳转的 URL */
+  supportUrl?: string
+  /** 客服入口位置。0=不显示，1=侧边栏底部，2=新对话按钮下方，3=悬浮球 */
+  supportPosition?: number
+  /** 错误引导文案。对话生成出错时在错误信息下方显示的引导内容，为空时不追加 */
+  errorGuidance?: string
+  /** 分享链接默认有效期（分钟），0 表示永不过期 */
+  shareExpireMinutes?: number
   suggestedQuestions: SuggestedQuestion[]
 }
 
@@ -722,44 +822,63 @@ export interface SystemSettings {
   name: string
   siteTitle: string
   logoUrl: string
+  /** 全局系统指令。注入每一个用户的每一次对话，置于模型指令之后作为兜底行为准则 */
+  systemInstruction: string
   /** 欢迎语。欢迎页大标题，空值时前端使用默认文案 */
   welcomeMessage: string
+  /** 欢迎副标题。欢迎页大标题下方的引导文案，空值时前端使用默认文案 */
+  welcomeSubtitle: string
+  /** 客服文本。侧边栏或悬浮球中显示的帮助链接文字，为空时不展示 */
+  supportText: string
+  /** 客服链接。点击客服文本跳转的 URL */
+  supportUrl: string
+  /** 客服入口位置。0=不显示，1=侧边栏底部，2=新对话按钮下方，3=悬浮球 */
+  supportPosition: number
   autoGenerateTitle: boolean
+  /** 错误引导文案。对话生成出错时在错误信息下方显示的引导内容，为空时不追加 */
+  errorGuidance: string
   // 对话默认
   defaultModel: number
   defaultThinkingMode: number
   defaultContextRounds: number
+  enableUserIsolation: boolean
+  /** 重排序模型编码。CrossEncoder 二次精排场景使用，为空时跳过重排 */
+  rerankModel: string
   // 上传与分享
   maxAttachmentSize: number
-  maxAttachmentCount: number
   allowedExtensions: string
   defaultImageSize: string
-  shareExpireDays: number
+  shareExpireMinutes: number
+  allowAnonymousShare: boolean
   // 网关
   enableGateway: boolean
   gatewayRateLimit: number
-  upstreamRetryCount: number
-  enableGatewayRecording: boolean
+  enableGatewayDomainMode: boolean
   // 工具能力
   enableFunctionCalling: boolean
+  /** 启用 MCP 工具调用 */
   enableMcp: boolean
-  enableSuggestedQuestionCache: boolean
-  streamingSpeed: number
-  toolAdvertiseThreshold: number
+  toolSlotLimit: number
   toolResultMaxChars: number
+  toolMaxIterations: number
+  skillBudgetChars: number
+  /** SQL查询允许的非查询操作。逗号分隔，默认允许 INSERT 和 UPDATE；SELECT/WITH 始终允许 */
+  querySqlAllowedOperations: string
   // 系统功能
   enableUsageStats: boolean
   backgroundGeneration: boolean
   maxMessagesPerMinute: number
   // 学习记忆
   enableAutoLearning: boolean
-  learningModel: string
+  lightweightModel: string
+  embedModel: string
   minLearningContentLength: number
 }
 
 export interface ModelOption {
   id: number
   name: string
+  isChatModel?: boolean
 }
 
 export interface SystemSettingsWithModels extends SystemSettings {
@@ -784,6 +903,7 @@ export interface Skill {
   category?: string
   description?: string
   isSystem: boolean
+  type?: string
 }
 
 export async function fetchAllSkills(category?: string): Promise<Skill[]> {
@@ -812,6 +932,23 @@ export async function setConversationSkill(conversationId: string, skillId: numb
     method: 'PUT',
     body: JSON.stringify({ skillId }),
   })
+}
+
+// SkillInfo / AgentInfo 类型别名，兼容 StarChat 共享组件
+export type SkillInfo = Skill
+
+export interface AgentInfo {
+  id: number
+  code: string
+  name: string
+  icon?: string
+  category?: string
+  description?: string
+}
+
+export async function fetchAgents(category?: string): Promise<AgentInfo[]> {
+  const params = category ? `?category=${encodeURIComponent(category)}` : ''
+  return request<AgentInfo[]>(`/api/agents${params}`)
 }
 
 // ── Memory ──
@@ -893,8 +1030,6 @@ export interface AppKeyItem {
   enable: boolean
   models: string | null
   expireTime: string | null
-  calls: number
-  totalTokens: number
   lastCallTime: string
   createTime: string
 }
@@ -971,6 +1106,7 @@ export async function updateModelSettings(
     supportAudio?: boolean
     supportImage?: boolean
     supportVideo?: boolean
+    locked?: boolean
   },
 ): Promise<void> {
   await request<void>(`/api/models/${id}/settings`, {

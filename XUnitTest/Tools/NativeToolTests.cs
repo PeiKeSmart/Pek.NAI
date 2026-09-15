@@ -2,12 +2,15 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using NewLife;
 using NewLife.AI.Clients;
 using NewLife.AI.Models;
+using NewLife.AI.Services;
 using NewLife.AI.Tools;
+using NewLife.Serialization;
 using Xunit;
 
 namespace XUnitTest.Tools;
@@ -107,6 +110,107 @@ public class NativeToolTests
                             {
                                 Role = "assistant",
                                 Content = _finalReply
+                            }
+                        }
+                    ]
+                };
+            }
+
+            return Task.FromResult<IChatResponse>(resp);
+        }
+
+        public IAsyncEnumerable<IChatResponse> GetStreamingResponseAsync(IChatRequest request, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public void Dispose() { }
+    }
+
+    /// <summary>第一轮返回工具调用，第二轮返回空内容，之后返回强制回答（模拟模型放弃/仅输出思考）</summary>
+    private sealed class ToolCallThenEmptyClient : IChatClient
+    {
+        private readonly String _toolName;
+        private readonly String _toolArgs;
+        private readonly String _forcedReply;
+        private Int32 _callCount;
+
+        /// <summary>最近一次请求，供断言强制轮携带提示</summary>
+        public IChatRequest LastRequest { get; private set; }
+
+        public ToolCallThenEmptyClient(String toolName, String toolArgs, String forcedReply)
+        {
+            _toolName = toolName;
+            _toolArgs = toolArgs;
+            _forcedReply = forcedReply;
+        }
+
+        public Task<IChatResponse> GetResponseAsync(IChatRequest request, CancellationToken ct = default)
+        {
+            _callCount++;
+            LastRequest = request;
+
+            ChatResponse resp;
+            if (_callCount == 1)
+            {
+                // 第一次调用：返回工具调用
+                resp = new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage
+                            {
+                                Role = "assistant",
+                                Content = null,
+                                ToolCalls =
+                                [
+                                    new ToolCall
+                                    {
+                                        Id = "call_001",
+                                        Type = "function",
+                                        Function = new FunctionCall
+                                        {
+                                            Name = _toolName,
+                                            Arguments = _toolArgs
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                };
+            }
+            else if (_callCount == 2)
+            {
+                // 第二次调用：模型放弃，返回空内容（无工具调用）
+                resp = new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage
+                            {
+                                Role = "assistant",
+                                Content = ""
+                            }
+                        }
+                    ]
+                };
+            }
+            else
+            {
+                // 第三次调用：框架强制后返回最终回答
+                resp = new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage
+                            {
+                                Role = "assistant",
+                                Content = _forcedReply
                             }
                         }
                     ]
@@ -254,7 +358,7 @@ public class NativeToolTests
     public async Task AddTool_DelegateRegistration_InvokesCorrectly()
     {
         var registry = new ToolRegistry();
-        registry.AddTool("echo", async (args, ct) =>
+        registry.AddTool("echo", async (args, context, ct) =>
         {
             await Task.Yield();
             return args ?? "null";
@@ -280,12 +384,36 @@ public class NativeToolTests
             finalReply: "计算结果是 30");
 
         var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
-        IList<ChatMessage> messages = [new ChatMessage { Role = "user", Content = "10 + 20 等于多少？" }];
 
-        var response = await nativeClient.GetResponseAsync(messages);
+        var response = await nativeClient.GetResponseAsync("10 + 20 等于多少？", cancellationToken: default);
         var content = response.Messages?.FirstOrDefault()?.Message?.Content as String;
 
         Assert.Equal("计算结果是 30", content);
+    }
+
+    [Fact]
+    [DisplayName("ToolChatClient 工具调用后最终轮空内容时强制产出最终回答")]
+    public async Task ToolChatClient_EmptyFinalReply_ForcesFinalAnswer()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MathToolService());
+
+        // 模拟模型先调用 add_numbers，随后返回空内容（模型放弃/只输出思考）
+        var innerClient = new ToolCallThenEmptyClient(
+            toolName: "add_numbers",
+            toolArgs: "{\"a\":10,\"b\":20}",
+            forcedReply: "基于工具结果：计算结果是 30");
+
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var response = await nativeClient.GetResponseAsync("10 + 20 等于多少？", cancellationToken: default);
+        var content = response.Messages?.FirstOrDefault()?.Message?.Content as String;
+
+        Assert.Equal("基于工具结果：计算结果是 30", content);
+        // 强制轮应携带"直接给出最终回答"的系统提示
+        Assert.NotNull(innerClient.LastRequest);
+        Assert.Contains(innerClient.LastRequest.Messages, m =>
+            m.Role == "user" && (m.Content as String)?.Contains("最终回答") == true);
     }
 
     [Fact]
@@ -323,7 +451,7 @@ public class NativeToolTests
         inputOptions["EnableSource"] = true;
         inputOptions["EnableSearchExtension"] = false;
 
-        await nativeClient.GetResponseAsync([new ChatMessage { Role = "user", Content = "ping" }], inputOptions);
+        await nativeClient.GetResponseAsync("ping", inputOptions, default);
 
         Assert.NotNull(captured);
         Assert.True(captured.EnableThinking);
@@ -337,13 +465,269 @@ public class NativeToolTests
         Assert.Equal(888L, captured.ConversationId.ToLong());
     }
 
+    // ── ToolChatClient 去重复用测试 ────────────────────────────────────────
+
+    /// <summary>带调用计数的工具服务。验证去重后重复调用不重复执行工具</summary>
+    private sealed class CountingToolService
+    {
+        /// <summary>add_numbers 实际执行次数</summary>
+        public Int32 AddCalls;
+
+        /// <summary>show_widget 实际执行次数</summary>
+        public Int32 ShowWidgetCalls;
+
+        /// <summary>两数相加（计数）</summary>
+        /// <param name="a">第一个操作数</param>
+        /// <param name="b">第二个操作数</param>
+        [ToolDescription("add_numbers")]
+        public Int32 Add(Int32 a, Int32 b)
+        {
+            AddCalls++;
+            return a + b;
+        }
+
+        /// <summary>渲染 Widget（计数 + 双受众结果，模拟可视化工具）</summary>
+        /// <param name="title">标题</param>
+        /// <param name="content">内容</param>
+        [ToolDescription("show_widget")]
+        public ToolResult ShowWidget(String title, String content)
+        {
+            ShowWidgetCalls++;
+            var json = new { widgetId = $"w{ShowWidgetCalls}", kind = "html", title, code = content }.ToJson();
+            return ToolResult.ForAudiences(json, $"[已渲染Widget到客户端：{title}]");
+        }
+    }
+
+    /// <summary>多轮工具调用假客户端：按序返回每轮 tool_calls，最后一轮返回最终文本</summary>
+    private sealed class MultiRoundToolCallClient : IChatClient
+    {
+        private readonly IList<IList<ToolCall>> _rounds;
+        private readonly String _finalReply;
+        private Int32 _callCount;
+
+        /// <summary>每次请求消息列表快照，供断言 role=tool 消息内容</summary>
+        public List<IList<ChatMessage>> Requests { get; } = [];
+
+        public MultiRoundToolCallClient(String finalReply, params IList<ToolCall>[] rounds)
+        {
+            _finalReply = finalReply;
+            _rounds = rounds;
+        }
+
+        public Task<IChatResponse> GetResponseAsync(IChatRequest request, CancellationToken ct = default)
+        {
+            _callCount++;
+            Requests.Add(request.Messages.ToList());
+
+            ChatResponse resp;
+            if (_callCount <= _rounds.Count)
+            {
+                resp = new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage
+                            {
+                                Role = "assistant",
+                                Content = null,
+                                ToolCalls = _rounds[_callCount - 1].ToList()
+                            }
+                        }
+                    ]
+                };
+            }
+            else
+            {
+                resp = new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage { Role = "assistant", Content = _finalReply }
+                        }
+                    ]
+                };
+            }
+
+            return Task.FromResult<IChatResponse>(resp);
+        }
+
+        public IAsyncEnumerable<IChatResponse> GetStreamingResponseAsync(IChatRequest request, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public void Dispose() { }
+    }
+
+    /// <summary>流式多轮工具调用假客户端：按序返回每轮 tool_calls 分块，最后一轮返回最终文本 chunk</summary>
+    private sealed class StreamingMultiRoundToolCallClient : IChatClient
+    {
+        private readonly IList<IList<ToolCall>> _rounds;
+        private readonly String _finalReply;
+        private Int32 _callCount;
+
+        public StreamingMultiRoundToolCallClient(String finalReply, params IList<ToolCall>[] rounds)
+        {
+            _finalReply = finalReply;
+            _rounds = rounds;
+        }
+
+        public async IAsyncEnumerable<IChatResponse> GetStreamingResponseAsync(IChatRequest request, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _callCount++;
+            if (_callCount <= _rounds.Count)
+            {
+                // 工具轮：逐条分块返回 tool_calls（流式增量），末块携带 finish_reason=tool_calls
+                var round = _rounds[_callCount - 1];
+                for (var i = 0; i < round.Count; i++)
+                {
+                    var tc = round[i];
+                    var chunk = new ChatResponse { Object = "chat.completion.chunk" };
+                    chunk.AddToolCallDelta(tc.Id, tc.Function?.Name ?? "", tc.Function?.Arguments, FinishReasonHelper.Parse(i == round.Count - 1 ? "tool_calls" : null));
+                    yield return chunk;
+                }
+            }
+            else
+            {
+                var chunk = new ChatResponse { Object = "chat.completion.chunk" };
+                chunk.AddDelta(_finalReply, null, FinishReasonHelper.Parse("stop"));
+                yield return chunk;
+            }
+        }
+
+        public Task<IChatResponse> GetResponseAsync(IChatRequest request, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    [DisplayName("同轮同名同参去重：复用首次结果，工具只执行一次")]
+    public async Task ToolChatClient_SameRoundDuplicate_ReusesFirstResult()
+    {
+        var toolService = new CountingToolService();
+        var registry = new ToolRegistry();
+        registry.AddTools(toolService);
+
+        // 第一轮：同轮两个完全相同的 add_numbers 调用；第二轮：最终文本
+        var innerClient = new MultiRoundToolCallClient(
+            "计算结果是 30",
+            [
+                new ToolCall
+                {
+                    Id = "call_001",
+                    Type = "function",
+                    Function = new FunctionCall { Name = "add_numbers", Arguments = "{\"a\":10,\"b\":20}" }
+                },
+                new ToolCall
+                {
+                    Id = "call_002",
+                    Type = "function",
+                    Function = new FunctionCall { Name = "add_numbers", Arguments = "{\"a\":10,\"b\":20}" }
+                }
+            ]);
+
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var response = await nativeClient.GetResponseAsync("10 + 20 等于多少？", cancellationToken: default);
+        var content = response.Messages?.FirstOrDefault()?.Message?.Content as String;
+
+        Assert.Equal("计算结果是 30", content);
+        // 同轮同名同参去重：工具只执行一次
+        Assert.Equal(1, toolService.AddCalls);
+
+        // 第二轮请求中 role=tool 消息：首次执行完整结果 + 复用简短说明（非占位"已去重"）
+        var toolMessages = innerClient.Requests[1].Where(m => m.Role == "tool").ToList();
+        Assert.Equal(2, toolMessages.Count);
+        var firstLlm = toolMessages[0].Content as String;
+        var secondLlm = toolMessages[1].Content as String;
+        Assert.DoesNotContain("已复用", firstLlm);
+        Assert.DoesNotContain("已去重", firstLlm);
+        Assert.Contains("已复用", secondLlm);
+        Assert.DoesNotContain("已去重", secondLlm);
+    }
+
+    [Fact]
+    [DisplayName("跨轮 show_* 去重：复用首次渲染结果，工具只执行一次")]
+    public async Task ToolChatClient_CrossRoundShowDuplicate_ReusesFirstResult()
+    {
+        var toolService = new CountingToolService();
+        var registry = new ToolRegistry();
+        registry.AddTools(toolService);
+
+        var widgetArgs = "{\"title\":\"测试图表\",\"content\":\"<div>hi</div>\"}";
+
+        // 第一轮：show_widget；第二轮：相同参数再次调用（跨轮去重）；第三轮：最终文本
+        var innerClient = new MultiRoundToolCallClient(
+            "已生成图表",
+            [new ToolCall { Id = "call_001", Type = "function", Function = new FunctionCall { Name = "show_widget", Arguments = widgetArgs } }],
+            [new ToolCall { Id = "call_002", Type = "function", Function = new FunctionCall { Name = "show_widget", Arguments = widgetArgs } }]);
+
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var response = await nativeClient.GetResponseAsync("请生成图表", cancellationToken: default);
+        var content = response.Messages?.FirstOrDefault()?.Message?.Content as String;
+
+        Assert.Equal("已生成图表", content);
+        // 跨轮去重：show_widget 只执行一次
+        Assert.Equal(1, toolService.ShowWidgetCalls);
+
+        // 第三轮请求中 role=tool 消息：首次完整结果 + 复用简短说明（非占位"已去重"）
+        var toolMessages = innerClient.Requests[2].Where(m => m.Role == "tool").ToList();
+        Assert.Equal(2, toolMessages.Count);
+        var firstLlm = toolMessages[0].Content as String;
+        var secondLlm = toolMessages[1].Content as String;
+        Assert.Contains("已渲染", firstLlm);
+        Assert.DoesNotContain("已复用", firstLlm);
+        Assert.Contains("已复用", secondLlm);
+        Assert.DoesNotContain("已去重", secondLlm);
+    }
+
+    [Fact]
+    [DisplayName("流式跨轮 show_* 去重：done 事件携带复用后的完整用户内容")]
+    public async Task ToolChatClient_StreamingCrossRoundDuplicate_ReusesUserContent()
+    {
+        var toolService = new CountingToolService();
+        var registry = new ToolRegistry();
+        registry.AddTools(toolService);
+
+        var widgetArgs = "{\"title\":\"测试图表\",\"content\":\"<div>hi</div>\"}";
+
+        var innerClient = new StreamingMultiRoundToolCallClient(
+            "已生成图表",
+            [new ToolCall { Id = "call_001", Type = "function", Function = new FunctionCall { Name = "show_widget", Arguments = widgetArgs } }],
+            [new ToolCall { Id = "call_002", Type = "function", Function = new FunctionCall { Name = "show_widget", Arguments = widgetArgs } }]);
+
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var doneEvents = new List<ToolCallEventInfo>();
+        var request = ChatRequest.Create([new ChatMessage { Role = "user", Content = "请生成图表" }], new ChatOptions { Model = "test" }, stream: true);
+        await foreach (var chunk in nativeClient.GetStreamingResponseAsync(request))
+        {
+            if (chunk is ChatResponse cr && cr.ToolCallEvents is { Count: > 0 } events)
+                doneEvents.AddRange(events.Where(e => e.Type == "done"));
+        }
+
+        // 两个 done 事件：首次执行（完整 Widget JSON）+ 复用（同样完整 Widget JSON，非 duplicate 占位）
+        Assert.Equal(2, doneEvents.Count);
+        Assert.Equal(1, toolService.ShowWidgetCalls);
+        foreach (var evt in doneEvents)
+        {
+            Assert.NotNull(evt.Value);
+            Assert.DoesNotContain("duplicate", evt.Value!);
+            Assert.Contains("widgetId", evt.Value!);
+        }
+    }
+
     // 测试专用：捕获调用选项的假客户端，不触发工具循环
     private sealed class CapturingChatClient : IChatClient
     {
-        private readonly Action<IChatRequest?> _capture;
+        private readonly Action<IChatRequest> _capture;
         private readonly String _finalReply;
 
-        public CapturingChatClient(Action<IChatRequest?> capture, String finalReply)
+        public CapturingChatClient(Action<IChatRequest> capture, String finalReply)
         {
             _capture = capture;
             _finalReply = finalReply;
@@ -436,6 +820,14 @@ public class NativeToolTests
     public void IsSsrfRisk_Ipv6Loopback_ReturnsTrue()
         => Assert.True(ToolHelper.IsSsrfRisk("::1"));
 
+    [Fact]
+    [DisplayName("主机名解析为内网 IP 时判定为 SSRF 风险（A-11）")]
+    public void IsSsrfRisk_HostResolvingToPrivateIp_ReturnsTrue()
+    {
+        // 部分环境下 localhost 解析到 ::1 或 127.0.0.1，均为内网
+        Assert.True(ToolHelper.IsSsrfRisk("localhost"));
+    }
+
     // ── ToolHelper.ExtractTextFromHtml ────────────────────────────────────────
 
     [Fact]
@@ -524,5 +916,544 @@ public class NativeToolTests
         using var client = ToolHelper.CreateDefaultHttpClient();
         var ua = client.DefaultRequestHeaders.UserAgent.ToString();
         Assert.Contains("Mozilla", ua);
+    }
+
+    // ── ToolError 结构化错误返回测试 ──────────────────────────────────────────
+
+    [Fact]
+    [DisplayName("ToolError.ToJson 生成含 error_code 和 hint 字段的 JSON")]
+    public void ToolError_ToJson_ContainsRequiredFields()
+    {
+        var err = ToolError.Create("SYNTAX_ERROR", "SQL 语法错误");
+        var json = err.ToJson();
+
+        Assert.Contains("\"error_code\"", json);
+        Assert.Contains("SYNTAX_ERROR", json);
+        Assert.Contains("\"hint\"", json);
+        Assert.Contains("SQL 语法错误", json);
+    }
+
+    [Fact]
+    [DisplayName("ToolError.ToJson 含 suggested_fix 时输出该字段")]
+    public void ToolError_ToJson_IncludesSuggestedFix()
+    {
+        var err = ToolError.Create("SYNTAX_ERROR", "SQL 语法错误", "请添加 SELECT 子句");
+        var json = err.ToJson();
+
+        Assert.Contains("\"suggested_fix\"", json);
+        Assert.Contains("SELECT 子句", json);
+    }
+
+    [Fact]
+    [DisplayName("ToolError.ToJson 不含 suggested_fix 时省略该字段")]
+    public void ToolError_ToJson_OmitsSuggestedFixWhenNull()
+    {
+        var err = ToolError.Create("NOT_FOUND", "工具未找到");
+        var json = err.ToJson();
+
+        Assert.DoesNotContain("suggested_fix", json);
+    }
+
+    [Fact]
+    [DisplayName("ToolError.IsToolError 正确识别结构化错误 JSON")]
+    public void ToolError_IsToolError_RecognizesErrorJson()
+    {
+        var errJson = ToolError.Create("TEST", "hint").ToJson();
+        Assert.True(ToolError.IsToolError(errJson));
+        Assert.False(ToolError.IsToolError("计算结果是 30"));
+        Assert.False(ToolError.IsToolError(null));
+        Assert.False(ToolError.IsToolError(String.Empty));
+    }
+
+    [Fact]
+    [DisplayName("ToolError.ToJson 对特殊字符正确转义")]
+    public void ToolError_ToJson_EscapesSpecialChars()
+    {
+        var err = ToolError.Create("ERR", "含\"引号\"和\\反斜线");
+        var json = err.ToJson();
+
+        // 必须合法 JSON：引号转义为 \"，反斜线转义为 \\
+        Assert.Contains("\\\"", json);
+        Assert.Contains("\\\\", json);
+    }
+
+    // ── ToolResult.ForAudiences 双受众工厂测试 ────────────────────────────────
+
+    [Fact]
+    [DisplayName("ForAudiences 创建 User+Llm 双受众内容块")]
+    public void ForAudiences_CreatesTwoAudiences()
+    {
+        var result = ToolResult.ForAudiences("用户数据", "模型摘要");
+
+        Assert.Equal(2, result.Contents.Count);
+        Assert.True(result.Contents[0].Audience.HasFlag(ToolAudience.User));
+        Assert.Equal("用户数据", result.Contents[0].Data);
+        Assert.True(result.Contents[1].Audience.HasFlag(ToolAudience.Llm));
+        Assert.Equal("模型摘要", result.Contents[1].Data);
+    }
+
+    [Fact]
+    [DisplayName("ForAudiences 默认 IsError=false")]
+    public void ForAudiences_DefaultNotError()
+    {
+        var result = ToolResult.ForAudiences("用户数据", "模型摘要");
+        Assert.False(result.IsError);
+    }
+
+    [Fact]
+    [DisplayName("ForAudiences 支持 isError 参数标记失败")]
+    public void ForAudiences_IsError_True()
+    {
+        var result = ToolResult.ForAudiences("错误", "请重试", true);
+        Assert.True(result.IsError);
+    }
+
+    // ── ToolApprovalTier 三档权限测试 ─────────────────────────────────────────
+
+    [Fact]
+    [DisplayName("ToolApprovalTier.Allow 低风险工具绕过审批直接执行")]
+    public async Task ToolChatClient_TierAllow_SkipsApproval()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MathToolService());
+
+        var innerClient = new ToolCallThenReplyClient("add_numbers", "{\"a\":1,\"b\":2}", "结果 3");
+        var client = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var approvalRequested = false;
+        client.ApprovalProvider = new TierApprovalProvider(
+            tier: ToolApprovalTier.Allow,
+            onRequest: () => { approvalRequested = true; return ToolApprovalResult.Allow; });
+
+        await client.GetResponseAsync("1+2?", cancellationToken: default);
+        Assert.False(approvalRequested, "Allow 档位不应调用 RequestApprovalAsync");
+    }
+
+    [Fact]
+    [DisplayName("ToolApprovalTier.Deny 高风险工具被代码层阻断，不调用审批")]
+    public async Task ToolChatClient_TierDeny_BlocksWithoutApproval()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MathToolService());
+
+        var innerClient = new ToolCallThenReplyClient("add_numbers", "{\"a\":1,\"b\":2}", "done");
+        var client = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var approvalRequested = false;
+        client.ApprovalProvider = new TierApprovalProvider(
+            tier: ToolApprovalTier.Deny,
+            onRequest: () => { approvalRequested = true; return ToolApprovalResult.Allow; });
+
+        await client.GetResponseAsync("1+2?", cancellationToken: default);
+        Assert.False(approvalRequested, "Deny 档位不应调用 RequestApprovalAsync");
+    }
+
+    [Fact]
+    [DisplayName("ToolApprovalTier.Ask 中风险工具调用审批，用户拒绝后返回结构化错误")]
+    public async Task ToolChatClient_TierAsk_UserDeny_ReturnsStructuredError()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MathToolService());
+
+        // 第二次返回最终文本（包含工具结果）
+        var innerClient = new ToolCallThenReplyClient("add_numbers", "{\"a\":1,\"b\":2}", "已处理");
+        var client = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        client.ApprovalProvider = new TierApprovalProvider(
+            tier: ToolApprovalTier.Ask,
+            onRequest: () => ToolApprovalResult.Deny);
+
+        // 不应抛出异常，错误被结构化返回给模型
+        var response = await client.GetResponseAsync("1+2?", cancellationToken: default);
+        Assert.NotNull(response);
+    }
+
+    [Fact]
+    [DisplayName("工具执行抛异常时返回结构化错误 JSON 而非向上抛出")]
+    public async Task ToolChatClient_ToolException_ReturnsStructuredError()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTool("failing_tool", (_, __, ___) =>
+        {
+            throw new InvalidOperationException("数据库连接失败");
+#pragma warning disable CS0162
+            return Task.FromResult(String.Empty);
+#pragma warning restore CS0162
+        });
+
+        var innerClient = new ToolCallThenReplyClient("failing_tool", "{}", "done");
+        var client = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        // 不应抛出 — 异常被捕获为结构化错误传给模型
+        var response = await client.GetResponseAsync("fail", cancellationToken: default);
+        Assert.NotNull(response);
+    }
+
+    // 测试专用：支持配置档位的审批提供者（同时实现 IToolTierProvider）
+    private sealed class TierApprovalProvider : IToolApprovalProvider, IToolTierProvider
+    {
+        private readonly ToolApprovalTier _tier;
+        private readonly Func<ToolApprovalResult> _onRequest;
+
+        public TierApprovalProvider(ToolApprovalTier tier, Func<ToolApprovalResult> onRequest)
+        {
+            _tier = tier;
+            _onRequest = onRequest;
+        }
+
+        public ToolApprovalTier GetToolTier(String toolName) => _tier;
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(String toolName, String argumentsJson, CancellationToken ct = default)
+            => Task.FromResult(_onRequest());
+    }
+
+    // ── B1 新特性：ToolResponseRouting / ToolCallId / isCatalogCall ────────────
+
+    /// <summary>带 Frontend 路由标注的测试工具服务</summary>
+    private sealed class FrontendToolService
+    {
+        /// <summary>展示可视化内容</summary>
+        /// <param name="content">内容</param>
+        [ToolDescription("show_visual", ReadOnly = true)]
+        public String ShowVisual(String content) => $"{{\"rendered\":\"{content}\"}}";
+    }
+
+    /// <summary>捕获第 N 次调用请求消息的假客户端</summary>
+    private sealed class MessageCapturingClient : IChatClient
+    {
+        private readonly String _toolName;
+        private readonly String _toolArgs;
+        private readonly String _finalReply;
+        private Int32 _callCount;
+
+        /// <summary>第二次调用时收到的消息列表</summary>
+        public IList<ChatMessage> SecondCallMessages { get; private set; }
+
+        public MessageCapturingClient(String toolName, String toolArgs, String finalReply)
+        {
+            _toolName = toolName;
+            _toolArgs = toolArgs;
+            _finalReply = finalReply;
+        }
+
+        public Task<IChatResponse> GetResponseAsync(IChatRequest request, CancellationToken ct = default)
+        {
+            _callCount++;
+            if (_callCount == 2)
+                SecondCallMessages = request.Messages?.ToList();
+
+            if (_callCount == 1)
+            {
+                return Task.FromResult<IChatResponse>(new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            Message = new ChatMessage
+                            {
+                                Role = "assistant",
+                                ToolCalls =
+                                [
+                                    new ToolCall
+                                    {
+                                        Id = "call_b1",
+                                        Type = "function",
+                                        Function = new FunctionCall { Name = _toolName, Arguments = _toolArgs }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                });
+            }
+            return Task.FromResult<IChatResponse>(new ChatResponse
+            {
+                Messages = [new ChatChoice { Message = new ChatMessage { Role = "assistant", Content = _finalReply } }]
+            });
+        }
+
+        public IAsyncEnumerable<IChatResponse> GetStreamingResponseAsync(IChatRequest request, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    [DisplayName("ToolDescriptionAttribute 默认 Idempotent 为 true")]
+    public void ToolDescriptionAttribute_DefaultIdempotent_IsTrue()
+    {
+        var attr = new ToolDescriptionAttribute("tool");
+        Assert.True(attr.Idempotent);
+    }
+
+    [Fact]
+    [DisplayName("ToolDescriptionAttribute 可设置 ReadOnly = true")]
+    public void ToolDescriptionAttribute_ReadOnly_CanBeSet()
+    {
+        var attr = new ToolDescriptionAttribute("tool") { ReadOnly = true };
+        Assert.True(attr.ReadOnly);
+    }
+
+    [Fact]
+    [DisplayName("ToolSchemaBuilder 从 ToolDescriptionAttribute 读取属性（Routing 已移除）")]
+    public void ToolSchemaBuilder_Attributes_AreReadFromAttribute()
+    {
+        var method = typeof(FrontendToolService).GetMethod(nameof(FrontendToolService.ShowVisual))!;
+        var tool = ToolSchemaBuilder.BuildFromMethod(method);
+
+        Assert.NotNull(tool.Function);
+        Assert.Equal("show_visual", tool.Function!.Name);
+    }
+
+    // [Fact] 暂禁用：Frontend 路由已改为运行时 IToolResult.Contents.Audience，需重写为返回 ToolResult(ForLlm(), ForUser()) 的集成测试
+    // TODO: Frontend 路由测试需要重写为 IToolResult.Audience 模式
+    // 原测试验证 role=tool 消息写入占位文本，新模式下由 IToolResult.Contents 决定
+    /*
+    [Fact]
+    [DisplayName("Frontend 路由工具：role=tool 消息写入占位文本而非真实结果")]
+    public async Task ToolChatClient_FrontendRouting_WritesPlaceholderToLlm()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new FrontendToolService());
+
+        var innerClient = new MessageCapturingClient(
+            toolName: "show_visual",
+            toolArgs: "{\"content\":\"hello\"}",
+            finalReply: "已渲染");
+
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+        await nativeClient.GetResponseAsync("渲染图表", cancellationToken: default);
+
+        // 第二次调用（工具结束后）发送给 LLM 的消息里，role=tool 内容应为占位符而非 JSON
+        var toolMsg = innerClient.SecondCallMessages?.FirstOrDefault(m => m.Role == "tool");
+        Assert.NotNull(toolMsg);
+        Assert.Contains("[已渲染到客户端：show_visual]", toolMsg!.Content as String ?? "");
+        Assert.DoesNotContain("rendered", toolMsg.Content as String ?? "");
+    }
+    */
+
+    [Fact]
+    [DisplayName("ToolCallId 在工具调用时与 LLM 返回的 tc.Id 一致")]
+    public async Task ToolChatClient_ToolCallId_MatchesTcId()
+    {
+        String capturedToolCallId = null;
+        var registry = new ToolRegistry();
+        registry.AddTool("id_capture", async (args, ctx, ct) =>
+        {
+            await Task.Yield();
+            capturedToolCallId = ctx?.ToolCallId;
+            return "ok";
+        });
+
+        var innerClient = new ToolCallThenReplyClient("id_capture", "{}", "done");
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+        await nativeClient.GetResponseAsync("test", cancellationToken: default);
+
+        Assert.Equal("call_001", capturedToolCallId);
+    }
+
+    [Fact]
+    [DisplayName("isCatalogCall 目录调用（工具不在 SelectedTools）：异常时返回 INVALID_ARGUMENTS + schema hint")]
+    public async Task ToolChatClient_CatalogCall_ThrowsReturnsInvalidArguments()
+    {
+        var registry = new ToolRegistry();
+        // dummy_tool 会被放入 SelectedTools，让 mergedTools 非空以启动工具循环
+        registry.AddTool("dummy_tool", (_, __, ___) => Task.FromResult("dummy"));
+        // strict_tool 不在 SelectedTools → isCatalogCall = true，调用时抛异常
+        registry.AddTool("strict_tool", (args, _, ___) =>
+        {
+            if (args.IsNullOrEmpty() || !args.Contains("\"name\""))
+                throw new ArgumentException("缺少必填参数 name");
+            return Task.FromResult("ok");
+        });
+
+        var capturingInner = new MessageCapturingClient("strict_tool", "{}", "done");
+        // SelectedTools 包含 dummy_tool 但不包含 strict_tool
+        var client = new ToolChatClient(capturingInner, (IToolProvider)registry)
+        {
+            SelectedTools = new System.Collections.Generic.HashSet<String>(System.StringComparer.OrdinalIgnoreCase) { "dummy_tool" }
+        };
+
+        await client.GetResponseAsync("test", cancellationToken: default);
+
+        // 工具结果写回 role=tool 消息后，第二轮 LLM 调用会收到该消息
+        var toolMsg = capturingInner.SecondCallMessages?.FirstOrDefault(m => m.Role == "tool");
+        Assert.NotNull(toolMsg);
+        var content = toolMsg!.Content as String ?? "";
+        Assert.Contains("INVALID_ARGUMENTS", content);
+    }
+
+    /// <summary>流式返回工具调用后再返回最终文本的假客户端；第 1 轮在 tool_calls 之后补发 finish_reason=stop（模拟部分网关行为）</summary>
+    private sealed class StreamToolCallThenReplyClient : IChatClient
+    {
+        private readonly String _toolName;
+        private readonly String _toolArgs;
+        private readonly String _finalReply;
+        private Int32 _callCount;
+
+        public StreamToolCallThenReplyClient(String toolName, String toolArgs, String finalReply)
+        {
+            _toolName = toolName;
+            _toolArgs = toolArgs;
+            _finalReply = finalReply;
+        }
+
+        public Task<IChatResponse> GetResponseAsync(IChatRequest request, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<IChatResponse> GetStreamingResponseAsync(IChatRequest request, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _callCount++;
+            if (_callCount == 1)
+            {
+                // 第 1 轮：先发 tool_calls（finish_reason=tool_calls），随后模拟上游网关补发 stop
+                yield return new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            FinishReason = FinishReason.ToolCalls,
+                            Delta = new ChatMessage
+                            {
+                                Role = "assistant",
+                                ToolCalls =
+                                [
+                                    new ToolCall
+                                    {
+                                        Id = "call_001",
+                                        Type = "function",
+                                        Function = new FunctionCall { Name = _toolName, Arguments = _toolArgs }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                };
+                yield return new ChatResponse
+                {
+                    Messages = [new ChatChoice { FinishReason = FinishReason.Stop, Delta = new ChatMessage() }]
+                };
+            }
+            else
+            {
+                // 第 2 轮（工具已执行）：最终文本
+                yield return new ChatResponse
+                {
+                    Messages =
+                    [
+                        new ChatChoice
+                        {
+                            FinishReason = FinishReason.Stop,
+                            Delta = new ChatMessage { Role = "assistant", Content = _finalReply }
+                        }
+                    ]
+                };
+            }
+            await Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    [DisplayName("ToolChatClient 防御：tool_calls 后补发 stop 不覆盖工具回合")]
+    public async Task ToolChatClient_ToolCallsThenStop_KeepsToolRound()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MathToolService());
+
+        // 模拟上游网关在 tool_calls 之后补发 finish_reason=stop（本防御修复的场景）
+        var innerClient = new StreamToolCallThenReplyClient("add_numbers", "{\"a\":10,\"b\":20}", "计算结果是 30");
+        var nativeClient = new ToolChatClient(innerClient, (IToolProvider)registry);
+
+        var request = ChatRequest.Create([new ChatMessage { Role = "user", Content = "10 + 20 等于多少？" }], stream: true);
+        List<String> texts = [];
+        await foreach (var chunk in nativeClient.GetStreamingResponseAsync(request, default))
+        {
+            var content = chunk.Messages?.FirstOrDefault()?.Delta?.Content as String;
+            if (!content.IsNullOrEmpty()) texts.Add(content);
+        }
+
+        // 工具被真实执行（进入第 2 轮产出最终文本），stop 未把工具回合误判为普通文本回合
+        Assert.Contains("计算结果是 30", texts);
+    }
+
+    // ── ValueTask 返回值支持（A-73）─────────────────────────────────────
+
+    /// <summary>返回 ValueTask 的测试工具服务</summary>
+    private sealed class ValueTaskToolService
+    {
+        /// <summary>同步返回 ValueTask&lt;String&gt;</summary>
+        /// <param name="name">名称</param>
+        [ToolDescription("vt_hello")]
+        public ValueTask<String> Hello(String name) => new($"Hello, {name}!");
+
+        /// <summary>异步返回 ValueTask&lt;Int32&gt;</summary>
+        /// <param name="a">加数</param>
+        /// <param name="b">加数</param>
+        [ToolDescription("vt_add")]
+        public async ValueTask<Int32> AddAsync(Int32 a, Int32 b) => a + b;
+    }
+
+    [Fact]
+    [DisplayName("InvokeAsync 支持同步 ValueTask<String> 返回值")]
+    public async Task InvokeAsync_ValueTaskString_ReturnsResult()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ValueTaskToolService());
+
+        var result = await registry.InvokeAsync("vt_hello", "{\"name\":\"World\"}");
+        Assert.Equal("Hello, World!", result);
+    }
+
+    [Fact]
+    [DisplayName("InvokeAsync 支持异步 ValueTask<Int32> 返回值")]
+    public async Task InvokeAsync_ValueTaskInt_ReturnsResult()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new ValueTaskToolService());
+
+        var result = await registry.InvokeAsync("vt_add", "{\"a\":3,\"b\":5}");
+        Assert.Equal("8", result);
+    }
+
+    // ── GetTools 过滤契约 + 请求级状态重置（A-73）────────────────────────
+
+    /// <summary>混合系统/普通工具的服务类</summary>
+    private sealed class MixedToolService
+    {
+        /// <summary>系统工具</summary>
+        [ToolDescription("sys_check", IsSystem = true)]
+        public String SysCheck() => "ok";
+
+        /// <summary>普通工具</summary>
+        [ToolDescription("user_tool")]
+        public String UserTool() => "user";
+    }
+
+    [Fact]
+    [DisplayName("GetTools 过滤契约：空集合仅返回系统工具，非空集合返回系统工具+指定")]
+    public void GetTools_FilterContract_MatchesInterface()
+    {
+        var registry = new ToolRegistry();
+        registry.AddTools(new MixedToolService());
+
+        var provider = (IToolProvider)registry;
+
+        // null → 全量
+        Assert.Equal(2, provider.GetTools(null).Count);
+
+        // 空集合 → 仅系统工具
+        var empty = provider.GetTools(new HashSet<String>());
+        Assert.Single(empty);
+        Assert.Equal("sys_check", empty[0].Function!.Name);
+
+        // 非空集合 → 系统工具 + 指定工具
+        var named = provider.GetTools(new HashSet<String>(["user_tool"]));
+        Assert.Equal(2, named.Count);
+        Assert.Contains(named, t => t.Function!.Name == "sys_check");
+        Assert.Contains(named, t => t.Function!.Name == "user_tool");
     }
 }

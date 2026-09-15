@@ -8,7 +8,7 @@ using XCode.Membership;
 namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 
 /// <summary>用户设置。用户的个性化配置</summary>
-[Menu(100, true, Icon = "fa-table")]
+[Menu(9896, true, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class UserSettingController : ChatEntityController<UserSetting>
 {
@@ -56,12 +56,12 @@ public class UserSettingController : ChatEntityController<UserSetting>
         var allowTraining = p["allowTraining"]?.ToBoolean();
         var mcpEnabled = p["mcpEnabled"]?.ToBoolean();
         var showToolCalls = p["showToolCalls"]?.ToBoolean();
-        var thinkingCollapsed = p["thinkingCollapsed"]?.ToBoolean();
         var enableLearning = p["enableLearning"]?.ToBoolean();
+        var thinkingLayout = (ThinkingLayout)p["thinkingLayout"].ToInt(-1);
 
         var start = p["dtStart"].ToDateTime();
         var end = p["dtEnd"].ToDateTime();
 
-        return UserSetting.Search(userId, defaultThinkingMode, responseStyle, allowTraining, mcpEnabled, showToolCalls, thinkingCollapsed, enableLearning, start, end, p["Q"], p);
+        return UserSetting.Search(userId, defaultThinkingMode, responseStyle, allowTraining, mcpEnabled, showToolCalls, enableLearning, thinkingLayout, start, end, p["Q"], p);
     }
 }

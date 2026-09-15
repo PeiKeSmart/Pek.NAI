@@ -3,7 +3,7 @@ using NewLife.AI.Models;
 
 namespace NewLife.AI.Clients.OpenAI;
 
-/// <summary>OpenAI Chat Completion 响应。兼容 v1/chat/completions 和 v1/responses 协议，同时实现 IChatResponse 可直接作为统一响应使用</summary>
+/// <summary>OpenAI Chat Completion 响应。兼容 v1/chat/completions 协议（v1/responses 由 NewLifeAI 网关归一化为 chat.completion 格式后同样适用），同时实现 IChatResponse 可直接作为统一响应使用</summary>
 /// <remarks>
 /// 与内部统一 <see cref="ChatResponse"/> 的主要差异：
 /// <list type="bullet">
@@ -39,8 +39,8 @@ public class ChatCompletionResponse : IChatResponse
     [IgnoreDataMember]
     DateTimeOffset IChatResponse.Created
     {
-        get => Created > 0 ? DateTimeOffset.FromUnixTimeSeconds(Created) : DateTimeOffset.UtcNow;
-        set => Created = value.ToUnixTimeSeconds();
+        get => Created > 0 ? Created.ToDateTimeOffset() : DateTimeOffset.UtcNow;
+        set => Created = value.ToLong();
     }
 
     /// <summary>消息选择列表。从 Choices 适配为 IList&lt;ChatChoice&gt;</summary>
@@ -92,6 +92,7 @@ public class ChatCompletionResponse : IChatResponse
                     TotalTokens = Usage.TotalTokens,
                     CachedInputTokens = Usage.PromptTokensDetails?.CachedTokens ?? 0,
                     CacheCreationTokens = Usage.PromptTokensDetails?.CacheCreationInputTokens ?? 0,
+                    ReasoningTokens = Usage.CompletionTokensDetails?.ReasoningTokens ?? 0,
                 };
             }
             return _usageDetails;
@@ -99,7 +100,7 @@ public class ChatCompletionResponse : IChatResponse
         set => _usageDetails = value;
     }
 
-    /// <summary>获取回复文本</summary>
+    /// <summary>获取回复文本。多模态数组内容时提取 text 类型片段，避免返回数组 ToString 垃圾值</summary>
     [IgnoreDataMember]
     public String? Text
     {
@@ -108,7 +109,20 @@ public class ChatCompletionResponse : IChatResponse
             var choice = Choices?.FirstOrDefault();
             if (choice == null) return null;
             var msg = choice.Message ?? choice.Delta;
-            return msg?.Content is String s ? s : msg?.Content?.ToString();
+            var value = msg?.Content;
+            if (value is String s) return s;
+            if (value is IList<Object> list)
+            {
+                // 多模态内容数组：仅提取 text 类型片段
+                var texts = new List<String>();
+                foreach (var item in list)
+                {
+                    if (item is IDictionary<String, Object> d && d.TryGetValue("text", out var t) && t is String ts && !String.IsNullOrEmpty(ts))
+                        texts.Add(ts);
+                }
+                return texts.Count > 0 ? String.Join("", texts) : null;
+            }
+            return value?.ToString();
         }
     }
     #endregion
@@ -122,7 +136,7 @@ public class ChatCompletionResponse : IChatResponse
         {
             Id = Id,
             Object = Object,
-            Created = Created > 0 ? DateTimeOffset.FromUnixTimeSeconds(Created) : DateTimeOffset.UtcNow,
+            Created = Created > 0 ? Created.ToDateTimeOffset() : DateTimeOffset.UtcNow,
             Model = Model,
         };
 
@@ -151,6 +165,7 @@ public class ChatCompletionResponse : IChatResponse
                 TotalTokens = Usage.TotalTokens,
                 CachedInputTokens = Usage.PromptTokensDetails?.CachedTokens ?? 0,
                 CacheCreationTokens = Usage.PromptTokensDetails?.CacheCreationInputTokens ?? 0,
+                ReasoningTokens = Usage.CompletionTokensDetails?.ReasoningTokens ?? 0,
             };
         }
 
@@ -166,7 +181,7 @@ public class ChatCompletionResponse : IChatResponse
         {
             Id = response.Id,
             Object = response.Object ?? "chat.completion",
-            Created = response.Created.ToUnixTimeSeconds(),
+            Created = response.Created.ToLong(),
             Model = response.Model,
         };
 
@@ -200,7 +215,7 @@ public class ChatCompletionResponse : IChatResponse
         {
             Id = chunk.Id,
             Object = "chat.completion.chunk",
-            Created = chunk.Created.ToUnixTimeSeconds(),
+            Created = chunk.Created.ToLong(),
             Model = chunk.Model,
         };
 
@@ -258,20 +273,30 @@ public class CompletionUsage
     /// <summary>提示令牌详细信息。含缓存命中与缓存创建 Token 数</summary>
     public PromptTokensDetails? PromptTokensDetails { get; set; }
 
+    /// <summary>回复令牌详细信息。含推理 Token 数（reasoning_tokens）</summary>
+    public CompletionTokensDetails? CompletionTokensDetails { get; set; }
+
     /// <summary>从内部用量统计转换</summary>
     /// <param name="usage">内部用量统计</param>
     /// <returns>OpenAI 格式用量</returns>
-    public static CompletionUsage From(UsageDetails usage) => new()
+    public static CompletionUsage From(UsageDetails usage)
     {
-        PromptTokens = usage.InputTokens,
-        CompletionTokens = usage.OutputTokens,
-        TotalTokens = usage.TotalTokens,
-        PromptTokensDetails = new PromptTokensDetails
+        var result = new CompletionUsage
         {
-            CachedTokens = usage.CachedInputTokens,
-            CacheCreationInputTokens = usage.CacheCreationTokens,
-        }
-    };
+            PromptTokens = usage.InputTokens,
+            CompletionTokens = usage.OutputTokens,
+            TotalTokens = usage.TotalTokens,
+            PromptTokensDetails = new PromptTokensDetails
+            {
+                CachedTokens = usage.CachedInputTokens,
+                CacheCreationInputTokens = usage.CacheCreationTokens,
+            }
+        };
+        // 推理 Token 仅在思考模式模型（o 系列等）返回时携带，避免向不支持的服务商下发 0 值字段
+        if (usage.ReasoningTokens > 0)
+            result.CompletionTokensDetails = new CompletionTokensDetails { ReasoningTokens = usage.ReasoningTokens };
+        return result;
+    }
 }
 
 /// <summary>提示令牌详细信息。包含上下文缓存相关 Token 数</summary>
@@ -282,4 +307,11 @@ public class PromptTokensDetails
 
     /// <summary>创建显式缓存消耗的额外 Token 数（首次命中缓存标记时，按标准价格 125% 计费）</summary>
     public Int32 CacheCreationInputTokens { get; set; }
+}
+
+/// <summary>回复令牌详细信息。包含推理 Token 数</summary>
+public class CompletionTokensDetails
+{
+    /// <summary>推理 Token 数。思考模式模型（o 系列等）返回的推理过程 Token 消耗</summary>
+    public Int32 ReasoningTokens { get; set; }
 }

@@ -51,6 +51,7 @@ public class ModelsController(ChatApplicationService chatService) : ChatApiContr
                 SupportImage = m.SupportImage,
                 SupportVideo = m.SupportVideo,
                 SupportEmbedding = m.SupportEmbedding,
+                Locked = m.Locked,
             })
             .ToArray();
 
@@ -70,6 +71,12 @@ public class ModelsController(ChatApplicationService chatService) : ChatApiContr
         if (model == null)
             return NotFound(new { code = "NOT_FOUND", message = "模型不存在" });
 
+        // 保存原始锁定值，用于检测管理员是否显式修改了 Locked
+        var originalLocked = model.Locked;
+
+        // 自动锁定：管理员通过 API 手动保存即视为需要保护，防止程序重启自动覆盖
+        model.Locked = true;
+
         model.Enable = dto.Enable;
         model.ContextLength = dto.ContextLength;
         model.SupportThinking = dto.SupportThinking;
@@ -79,6 +86,11 @@ public class ModelsController(ChatApplicationService chatService) : ChatApiContr
         model.SupportImage = dto.SupportImage;
         model.SupportVideo = dto.SupportVideo;
         model.SupportEmbedding = dto.SupportEmbedding;
+
+        // 允许管理员通过 DTO 显式解锁/加锁（仅当与原始值不同时生效，避免前端回传当前值误覆盖）
+        if (dto.Locked.HasValue && dto.Locked.Value != originalLocked)
+            model.Locked = dto.Locked.Value;
+
         model.Save();
 
         return Ok(new ModelManageDto
@@ -98,6 +110,7 @@ public class ModelsController(ChatApplicationService chatService) : ChatApiContr
             SupportImage = model.SupportImage,
             SupportVideo = model.SupportVideo,
             SupportEmbedding = model.SupportEmbedding,
+            Locked = model.Locked,
         });
     }
 }

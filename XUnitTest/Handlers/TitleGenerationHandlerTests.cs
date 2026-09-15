@@ -202,10 +202,11 @@ public class TitleGenerationHandlerTests
         public IList<AiChatMessage> ContextMessages { get; set; } = new List<AiChatMessage>();
         public String? SystemPrompt { get; set; }
         public Action<String>? OnSystemReady { get; set; }
+        public IList<String> SystemSegments { get; } = new List<String>();
+        public IList<String> TailSegments { get; } = new List<String>();
         public ISet<String> SelectedTools { get; } = new HashSet<String>();
         public ISet<String> AvailableToolNames { get; } = new HashSet<String>();
-        public Int32 MaxTokens { get; set; }
-        public Double? Temperature { get; set; }
+        public ChatOptions Options { get; set; } = new();
         public String? FinishReason { get; set; }
         public System.Text.StringBuilder ContentBuilder { get; } = new();
         public System.Text.StringBuilder ThinkingBuilder { get; } = new();
@@ -217,8 +218,8 @@ public class TitleGenerationHandlerTests
         public String? CancelCode { get; set; }
         public String? CancelMessage { get; set; }
         public ChatFlowSource Source { get; set; } = ChatFlowSource.Web;
-        public Boolean PersistMessages { get; set; } = true;
         public IDictionary<String, Object?> Items { get; } = new Dictionary<String, Object?>(StringComparer.OrdinalIgnoreCase);
+        public IList<ISkill> ActivatedSkills => [];
         public Object? this[String key]
         {
             get => Items.TryGetValue(key, out var v) ? v : null;

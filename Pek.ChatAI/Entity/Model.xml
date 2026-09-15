@@ -38,7 +38,7 @@
     <!--魔方区域显示名-->
     <DisplayName>AI对话</DisplayName>
     <!--魔方控制器输出目录-->
-    <CubeOutput>../../NewLife.ChatAI/Areas/ChatAI/</CubeOutput>
+    <CubeOutput>../Areas/ChatAI/</CubeOutput>
   </Option>
   <Tables>
     <Table Name="Conversation" Description="会话。一次完整的多轮对话上下文" Output="消息对话">
@@ -61,6 +61,7 @@
         <Column Name="TotalTokens" DataType="Int32" Description="总Token数。会话累计消耗的总Token数（含额外LLM调用）" />
         <Column Name="ElapsedMs" DataType="Int32" Description="耗时。毫秒" />
         <Column Name="Source" DataType="String" Description="来源。Web/Gateway/Channel等，标识对话入口" />
+        <Column Name="Enable" DataType="Boolean" DefaultValue="true" Description="启用。false表示已删除/停用，不在会话列表中显示" />
         <Column Name="TraceId" DataType="String" Description="链路。方便问题排查" Category="扩展" Model="False" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
@@ -85,8 +86,8 @@
         <Column Name="ThinkingContent" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="思考内容。role=assistant时存AI推理过程；role=user时存本轮注入的系统上下文全文（含技能提示词与记忆注入，调试用）" />
         <Column Name="ThinkingMode" DataType="Int32" Description="思考模式。Auto=0自动, Think=1思考, Fast=2快速" Type="NewLife.AI.Models.ThinkingMode" />
         <Column Name="Attachments" DataType="String" ShowIn="Auto,-List,-Search" Length="500" Description="附件列表。存储魔方附件ID数组" />
-        <Column Name="SkillNames" DataType="String" Length="200" Description="技能列表。本轮激活的技能名称，多个逗号分隔" />
-        <Column Name="ToolNames" DataType="String" Length="500" Description="工具列表。role=user时记录本轮可用工具名（逗号分隔）；role=assistant时记录实际调用的工具名（逗号分隔）" />
+        <Column Name="SkillNames" DataType="String" Length="2000" Description="技能列表。本轮激活的技能名称，多个逗号分隔" />
+        <Column Name="ToolNames" DataType="String" Length="2000" Description="工具列表。role=user时记录本轮可用工具名（逗号分隔）；role=assistant时记录实际调用的工具名（逗号分隔）" />
         <Column Name="ToolCalls" DataType="String" ShowIn="Auto,-List,-Search" Length="-1" Description="工具调用。role=assistant时存实际调用链路ToolCallDto[]（含入参Arguments和执行结果Result）" />
         <Column Name="ModelName" DataType="String" Description="模型名称。实际使用的模型编码，方便回溯" />
         <Column Name="MaxTokens" DataType="Int32" Description="最大Token数。本次请求的最大生成Token数限制" />
@@ -98,6 +99,7 @@
         <Column Name="ElapsedMs" DataType="Int32" Description="耗时。毫秒" />
         <Column Name="FeedbackType" DataType="Int32" Description="反馈类型。None=0无反馈, Like=1点赞, Dislike=2点踩" Type="NewLife.AI.Models.FeedbackType" />
         <Column Name="FeedbackReason" DataType="String" Length="500" Description="反馈原因。点踩时的具体原因，可多选逗号分隔，或用户自定义输入" />
+        <Column Name="Enable" DataType="Boolean" DefaultValue="true" Description="启用。false表示已删除/停用，不参与历史上下文构建" />
         <Column Name="TraceId" DataType="String" Description="链路。方便问题排查" Category="扩展" Model="False" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
@@ -141,7 +143,8 @@
         <Column Name="InputTokens" DataType="Int32" Description="输入Token数" />
         <Column Name="OutputTokens" DataType="Int32" Description="输出Token数" />
         <Column Name="TotalTokens" DataType="Int32" Description="总Token数" />
-        <Column Name="CachedInputTokens" DataType="Int32" Description="缓存输入Token数" />
+        <Column Name="CachedInputTokens" DataType="Int32" Description="缓存命中Token数。从已创建缓存中读取的Token数" />
+        <Column Name="CacheCreationTokens" DataType="Int32" Description="缓存创建Token数。首次创建显式缓存消耗的输入Token数" />
         <Column Name="ReasoningTokens" DataType="Int32" Description="推理Token数" />
         <Column Name="InputAudioTokens" DataType="Int32" Description="音频输入Token数" />
         <Column Name="InputTextTokens" DataType="Int32" Description="文本输入Token数" />
@@ -170,6 +173,7 @@
         <Column Name="Endpoint" DataType="String" ItemType="url" Length="200" Description="接口地址。API地址" />
         <Column Name="ApiKey" DataType="String" ShowIn="Auto,-List,-Search" Length="200" Description="密钥。API访问密钥" />
         <Column Name="ApiProtocol" DataType="String" Description="API协议。ChatCompletions/ResponseApi/AnthropicMessages/Gemini" />
+        <Column Name="Organization" DataType="String" Length="200" Description="组织。提供商组织或业务空间标识，如阿里百炼业务空间(llm-xxx)、OpenAI组织。用于语音合成等场景的多端点派生" />
         <Column Name="ModelFilter" DataType="String" ShowIn="Auto,-List" Length="500" Description="模型过滤。逗号分隔的模型前缀或关键词，为空时发现全部。如：qwen-plus,qwen-max,deepseek" />
         <Column Name="ModelLimit" DataType="Int32" DefaultValue="10" Description="发现上限。单次模型发现的最大数量，0表示不限制，默认10" />
         <Column Name="RoleIds" DataType="String" Description="角色组。逗号分隔的角色ID列表，为空时不限制" />
@@ -196,20 +200,26 @@
         <Column Name="Code" DataType="String" Description="编码。模型唯一标识" />
         <Column Name="Name" DataType="String" Master="True" Description="名称。显示名称" />
         <Column Name="UpstreamModel" DataType="String" Description="上游模型。实际发送给上游API的模型编码，为空时使用Code。用于将内部模型标识（如newlife-plus）映射到提供商模型名（如qwen3.6-plus）" />
-        <Column Name="ContextLength" DataType="Int32" Description="上下文长度。模型支持的上下文窗口大小（令牌数）" />
+        <Column Name="ContextLength" DataType="Int32" ItemType="GMK" Description="上下文。模型支持的上下文窗口大小（令牌数）" />
         <Column Name="SupportThinking" DataType="Boolean" Description="思考。是否支持思考模式" />
         <Column Name="SupportFunction" DataType="Boolean" Description="函数调用。是否支持Function Calling" />
         <Column Name="SupportVision" DataType="Boolean" Description="视觉。是否支持图片输入" />
         <Column Name="SupportAudio" DataType="Boolean" Description="音频。是否支持音频输入输出" />
+        <Column Name="SupportSpeech" DataType="Boolean" Description="语音合成。是否支持语音合成/音频输出（TTS）" />
         <Column Name="SupportImage" DataType="Boolean" Description="图像。是否支持文生图" />
         <Column Name="SupportVideo" DataType="Boolean" Description="视频生成。是否支持文生视频" />
         <Column Name="SupportEmbedding" DataType="Boolean" Description="嵌入向量。是否支持Embedding向量化接口，用于RAG/知识库等场景" />
+        <Column Name="SupportRerank" DataType="Boolean" Description="重排序。是否支持重排序接口，用于RAG场景" />
+        <Column Name="ReasoningEfforts" DataType="String" Description="推理强度。支持的推理强度值，逗号分隔如 high,max；空表示不支持" />
+        <Column Name="EnablePromptCache" DataType="Boolean" Description="提示缓存。开启后所有请求标记 cache_control 创建上下文缓存，缓存命中时大幅降低输入成本" Category="计费" />
         <Column Name="SystemPrompt" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="2000" Description="系统提示词。模型级System Prompt，发送给上游的系统消息" />
+        <Column Name="Settings" DataType="String" ItemType="json" Length="2000" Description="模型设置。JSON格式的模型定制参数，如嵌入模型的编码格式(encodingFormat)、向量维度(dimensions)等。各模型能力对应的可用设置项见 EmbeddingModelSetting 类的文档注释" Category="扩展" />
         <Column Name="RoleIds" DataType="String" Description="角色组。逗号分隔的角色ID列表，为空时不限制" />
         <Column Name="DepartmentIds" DataType="String" Description="部门组。逗号分隔的部门ID列表，为空时不限制" />
         <Column Name="ModelTime" DataType="DateTime" Description="模型时间。提供商侧的模型创建或最后更新时间" />
         <Column Name="Enable" DataType="Boolean" Description="启用" />
         <Column Name="Sort" DataType="Int32" Description="排序。越大越靠前" />
+        <Column Name="Locked" DataType="Boolean" Description="锁定。锁定后禁止程序自动覆盖模型特性，仅允许手动修改" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
         <Column Name="CreateTime" DataType="DateTime" Description="创建时间" Category="扩展" Model="False" />
@@ -231,9 +241,7 @@
         <Column Name="Models" DataType="String" Length="200" Description="可用模型。逗号分隔的模型名称或编码，为空时不限制" />
         <Column Name="Enable" DataType="Boolean" Description="启用" />
         <Column Name="ExpireTime" DataType="DateTime" Description="过期时间。null表示永不过期" />
-        <Column Name="LastCallTime" DataType="DateTime" Description="最后调用时间" />
-        <Column Name="Calls" DataType="Int64" Description="调用次数。累计API请求数" />
-        <Column Name="TotalTokens" DataType="Int64" Description="总Token数。累计消耗Token" />
+        <Column Name="SystemPrompt" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
         <Column Name="CreateTime" DataType="DateTime" Description="创建时间" Category="扩展" Model="False" />
@@ -265,10 +273,10 @@
         <Column Name="AllowTraining" DataType="Boolean" Description="允许训练。是否允许反馈数据用于模型改进" />
         <Column Name="McpEnabled" DataType="Boolean" Description="启用MCP。是否启用MCP工具调用" />
         <Column Name="ShowToolCalls" DataType="Boolean" Description="显示工具调用。是否在对话中显示工具调用的入参和出参详情" />
-        <Column Name="ThinkingCollapsed" DataType="Boolean" Description="思考过程收缩。默认是否收缩展示思考过程，默认展开" />
         <Column Name="DefaultSkill" DataType="String" Description="默认技能。新会话的默认技能编码" />
         <Column Name="EnableLearning" DataType="Boolean" DefaultValue="true" Description="启用个人学习。用户级自学习开关，全局开关开启后此项生效" />
         <Column Name="ContentWidth" DataType="Int32" Description="内容区宽度。标准960/宽屏1200/自适应0" />
+        <Column Name="ThinkingLayout" DataType="Int32" Description="推理过程布局。Default=0默认, AboveCollapsed=1上方折叠, AboveExpanded=2上方展开, Side=3右侧分栏" Type="NewLife.AI.Models.ThinkingLayout" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
         <Column Name="CreateTime" DataType="DateTime" Description="创建时间" Category="扩展" Model="False" />
@@ -285,13 +293,15 @@
         <Column Name="Id" DataType="Int32" Identity="True" PrimaryKey="True" Description="编号" />
         <Column Name="Title" DataType="String" Master="True" Length="100" Description="标题。欢迎页按钮显示的短标题" />
         <Column Name="Question" DataType="String" Length="200" Description="问题。点击后发送给AI的完整提示词" />
-        <Column Name="Response" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="响应。缓存的AI回复内容，Markdown格式" />
-        <Column Name="ThinkingResponse" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="推理响应。缓存的思考过程内容" />
-        <Column Name="ModelId" DataType="Int32" Map="ModelConfig@Id@Name" Description="模型。生成缓存响应时使用的模型" />
+        <Column Name="ConversationId" DataType="Int64" Description="会话。关联的对话会话编号" />
+        <Column Name="MessageId" DataType="Int64" Description="消息。关联的助手消息编号，0=尚未缓存" />
         <Column Name="Icon" DataType="String" Description="图标。Material Icon名称，如chat_bubble_outline" />
         <Column Name="Color" DataType="String" Description="颜色。图标CSS颜色类，如text-blue-500" />
-        <Column Name="Sort" DataType="Int32" Description="排序。越大越靠前" />
         <Column Name="Enable" DataType="Boolean" Description="启用" />
+        <Column Name="CacheDuration" DataType="Int32" Description="缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟" />
+        <Column Name="HitCount" DataType="Int32" Description="命中次数。累计被用户提问的总次数" />
+        <Column Name="HeatScore" DataType="Double" Description="热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序" />
+        <Column Name="LastHitTime" DataType="DateTime" Description="最近命中时间。最后一次被用户提问的时间戳" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
         <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
         <Column Name="CreateTime" DataType="DateTime" Description="创建时间" Category="扩展" Model="False" />
@@ -300,8 +310,7 @@
         <Column Name="UpdateTime" DataType="DateTime" Description="更新时间" Category="扩展" Model="False" />
       </Columns>
       <Indexes>
-        <Index Columns="Sort" />
-        <Index Columns="Enable,Sort" />
+        <Index Columns="Enable" />
       </Indexes>
     </Table>
     <Table Name="ChatPreset" Description="对话预设。保存模型+技能+SystemPrompt组合为预设模板" Output="系统配置">
@@ -339,6 +348,7 @@
         <Column Name="AuthToken" DataType="String" ShowIn="Auto,-List,-Search" Length="500" Description="认证令牌" />
         <Column Name="AvailableTools" DataType="String" ShowIn="Auto,-List,-Search" Length="-1" Description="可用工具。已发现的工具列表，JSON格式" />
         <Column Name="Triggers" DataType="String" Length="500" Description="触发词。逗号分隔的关键词列表，消息包含任一词时自动加载该服务下的MCP工具；为空表示每轮默认可用" />
+        <Column Name="DisabledTools" DataType="String" Length="500" Description="禁用工具。逗号分隔的工具名称列表，支持*前缀通配（如 search_* 禁用所有search_开头工具）；被禁用的工具不暴露给AI" />
         <Column Name="Enable" DataType="Boolean" Description="启用" />
         <Column Name="Sort" DataType="Int32" Description="排序。越大越靠前" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
@@ -363,6 +373,7 @@
         <Column Name="Description" DataType="String" ItemType="markdown" Length="2000" Description="描述。工具功能说明，自动从Description特性提取，锁定后不再覆盖" />
         <Column Name="Parameters" DataType="String" ItemType="json" ShowIn="Auto,-List,-Search" Length="-1" Description="参数Schema。JSON格式的函数参数定义，锁定后不再覆盖" />
         <Column Name="Triggers" DataType="String" Length="500" Description="触发词。逗号分隔的关键词列表，消息包含任一词时自动激活该工具（仅IsSystem=false生效）" />
+        <Column Name="AssistantTriggers" DataType="String" Length="500" Description="助手触发词。逗号分隔，AI上一轮回复包含任一词时自动激活该工具（仅IsSystem=false生效）" />
         <Column Name="Enable" DataType="Boolean" DefaultValue="true" Description="启用。是否启用此工具，禁用后不传给LLM调用" />
         <Column Name="IsSystem" DataType="Boolean" Description="系统工具。每次LLM请求自动携带，无需@引用，如当前时间、当前用户信息" />
         <Column Name="IsLocked" DataType="Boolean" Description="锁定。锁定后启动扫描时不再覆盖描述和参数Schema信息，可用于手工调整" />
@@ -383,9 +394,35 @@
         <Index Columns="Enable" />
       </Indexes>
     </Table>
+    <Table Name="DbAccessConfig" Description="数据库访问配置。控制AI工具可访问的数据库表，支持白名单/黑名单和按角色授权" Output="系统配置">
+      <Columns>
+        <Column Name="Id" DataType="Int32" Identity="True" PrimaryKey="True" Description="编号" />
+        <Column Name="ConnName" DataType="String" Master="True" Description="连接名。对应appsettings.json中ConnectionStrings的Key" />
+        <Column Name="DbType" DataType="String" Description="数据库类型。SQLite/MySql/SqlServer/PostgreSQL/Oracle等" />
+        <Column Name="ConnString" DataType="String" Length="500" Description="连接字符串。DAL已注册的连接可为空；未注册的连接在此填写完整连接串" />
+        <Column Name="WhiteTables" DataType="String" Length="2000" Description="白名单。逗号分隔的表名列表，配置后仅允许访问这些表；为空则不限制" />
+        <Column Name="BlackTables" DataType="String" Length="2000" Description="黑名单。逗号分隔的表名列表，禁止访问这些表；白名单为空时生效" />
+        <Column Name="RoleIds" DataType="String" Length="500" Description="角色组。逗号分隔角色ID列表，命中即放行；为空时不限制" Category="安全" />
+        <Column Name="Enable" DataType="Boolean" DefaultValue="true" Description="启用" />
+        <Column Name="Sort" DataType="Int32" Description="排序。越大越靠前" />
+        <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
+        <Column Name="CreateIP" DataType="String" Description="创建地址" Category="扩展" Model="False" />
+        <Column Name="CreateTime" DataType="DateTime" Description="创建时间" Category="扩展" Model="False" />
+        <Column Name="UpdateUserID" DataType="Int32" Description="更新用户" Category="扩展" Model="False" />
+        <Column Name="UpdateIP" DataType="String" Description="更新地址" Category="扩展" Model="False" />
+        <Column Name="UpdateTime" DataType="DateTime" Description="更新时间" Category="扩展" Model="False" />
+        <Column Name="Remark" DataType="String" Length="500" Description="备注" Category="扩展" />
+      </Columns>
+      <Indexes>
+        <Index Columns="ConnName" Unique="True" />
+        <Index Columns="Enable" />
+      </Indexes>
+    </Table>
     <Table Name="Skill" Description="技能。可复用的AI行为指令，Markdown格式的结构化提示文本" Output="知识进化">
       <Columns>
         <Column Name="Id" DataType="Int32" Identity="True" PrimaryKey="True" Description="编号" />
+        <Column Name="UserId" DataType="Int32" DefaultValue="0" Description="用户。0=全局，&gt;0=个人技能。开源版仅支持全局技能" />
+        <Column Name="ProjectId" DataType="Int32" DefaultValue="0" Description="项目。0=个人/系统，&gt;0=该项目专属技能。开源版仅支持全局技能" />
         <Column Name="Code" DataType="String" Description="编码。英文标识，唯一，如coder、translator" />
         <Column Name="Name" DataType="String" Master="True" Description="名称。技能展示名称，同时也是@引用的标识" />
         <Column Name="Icon" DataType="String" Description="图标。Material Icon名称，如code、translate" />
@@ -393,11 +430,10 @@
         <Column Name="Description" DataType="String" Length="500" Description="描述。一句话说明该技能做什么" />
         <Column Name="Content" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="技能正文。Markdown格式，包含完整的行为指令、规则和示例" />
         <Column Name="Triggers" DataType="String" Length="500" Description="触发词。逗号分隔的关键词列表，用户消息包含任一词时自动激活该技能，如：翻译,translate,帮我译" />
-        <Column Name="ContinueHints" DataType="String" Length="200" Description="延续提示词。逗号分隔，匹配时保持技能活跃，如：继续翻译,再翻一段" />
-        <Column Name="ExitHints" DataType="String" Length="200" Description="退出提示词。逗号分隔，匹配时清除会话技能，如：不用翻译了,换个话题" />
         <Column Name="Sort" DataType="Int32" Description="排序。越大越靠前" />
         <Column Name="Enable" DataType="Boolean" Description="启用" />
-        <Column Name="IsSystem" DataType="Boolean" Description="系统。是否系统内置，内置技能不可删除" />
+        <Column Name="IsSystem" DataType="Boolean" Description="系统。系统技能无需引用或关键词匹配，每次对话自动注入 system 消息；用户不可删除" />
+        <Column Name="IsPrimary" DataType="Boolean" Description="主技能。标记为场景级技能（Agent），意图门控模式下作为可匹配的场景入口" />
         <Column Name="Version" DataType="Int32" Description="版本。每次编辑自增" />
         <Column Name="CreateUser" DataType="String" Description="创建者" Category="扩展" Model="False" />
         <Column Name="CreateUserID" DataType="Int32" Description="创建用户" Category="扩展" Model="False" />
@@ -424,6 +460,7 @@
         <Column Name="Value" DataType="String" ItemType="markdown" ShowIn="Auto,-List,-Search" Length="-1" Description="内容。提取到的具体信息" />
         <Column Name="Confidence" DataType="Int32" Description="置信度。0~100，越高越可信" />
         <Column Name="Scope" DataType="String" Description="作用域。user=用户级/team=团队级/global=全局" />
+        <Column Name="Source" DataType="String" Description="记忆来源。user=用户直接陈述/assistant_inferred=助手推断未确认/assistant_confirmed=助手推断已用户确认/user_confirmed=用户经确认卡确认" />
         <Column Name="Status" DataType="Int32" Description="状态。0=待审核/1=已生效/2=已拒绝/3=已废弃" />
         <Column Name="ReviewUserId" DataType="Int32" Description="审核人" />
         <Column Name="ReviewTime" DataType="DateTime" Description="审核时间" />

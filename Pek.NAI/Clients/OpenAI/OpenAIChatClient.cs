@@ -12,13 +12,13 @@ namespace NewLife.AI.Clients.OpenAI;
 /// <remarks>用连接选项初始化 OpenAI 客户端</remarks>
 // ── OpenAI 原生 ──────────────────────────────────────────────────────────────────────
 [AiClient("OpenAI", "OpenAI", "https://api.openai.com", Description = "OpenAI GPT 系列模型", Order = 1)]
-[AiClientModel("gpt-4.1", "GPT-4.1", Code = "OpenAI", Vision = true, FunctionCalling = true)]
-[AiClientModel("gpt-4o", "GPT-4o", Code = "OpenAI", Vision = true, FunctionCalling = true)]
-[AiClientModel("gpt-4o-mini", "GPT-4o Mini", Code = "OpenAI", Vision = true, FunctionCalling = true)]
-[AiClientModel("gpt-5-mini", "GPT-5 Mini", Code = "OpenAI", Vision = true, FunctionCalling = true)]
-[AiClientModel("o3-mini", "o3 Mini", Code = "OpenAI", Thinking = true, FunctionCalling = true)]
-[AiClientModel("o4-mini", "o4 Mini", Code = "OpenAI", Thinking = true, Vision = true, FunctionCalling = true)]
-[AiClientModel("dall-e-3", "DALL·E 3", Code = "OpenAI", ImageGeneration = true, FunctionCalling = false)]
+[AiClientModel("gpt-5.6", "GPT-5.6", Code = "OpenAI", Vision = true, FunctionCalling = true, InputPrice = 27.6, OutputPrice = 138, CachedInputPrice = 2.76, CacheCreationPrice = 34.5)]
+[AiClientModel("gpt-5.5", "GPT-5.5", Code = "OpenAI", Vision = true, FunctionCalling = true, InputPrice = 34.5, OutputPrice = 207, CachedInputPrice = 3.45)]
+[AiClientModel("gpt-5.4", "GPT-5.4", Code = "OpenAI", Vision = true, FunctionCalling = true, InputPrice = 17.25, OutputPrice = 103.5, CachedInputPrice = 1.725)]
+[AiClientModel("gpt-5.4-mini", "GPT-5.4 Mini", Code = "OpenAI", Vision = true, FunctionCalling = true, InputPrice = 5.175, OutputPrice = 31.05, CachedInputPrice = 0.518)]
+// 推理 + 图像代表（历史 GPT-4.x/o3 由模型元数据表承载）
+[AiClientModel("o4-mini", "o4 Mini", Code = "OpenAI", Thinking = true, Vision = true, FunctionCalling = true, ReasoningEfforts = "low,medium,high", InputPrice = 7.59, OutputPrice = 30.36, CachedInputPrice = 1.898)]
+[AiClientModel("dall-e-3", "DALL·E 3", Code = "OpenAI", ImageGeneration = true, FunctionCalling = false, InputPrice = 0.276)]
 public partial class OpenAIChatClient : OpenAIClientBase,
     IImageClient, IVideoClient, ISpeechClient, ITranscriptionClient, IEmbeddingClient
 {
@@ -46,8 +46,8 @@ public partial class OpenAIChatClient : OpenAIClientBase,
     /// <returns>图像生成响应，失败时返回 null</returns>
     public virtual async Task<ImageGenerationResponse?> TextToImageAsync(ImageGenerationRequest request, CancellationToken cancellationToken = default)
     {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        var url = endpoint + "/v1/images/generations";
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段，避免 .../v1/v1/images/generations
+        var url = CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), "/v1/images/generations");
 
         var json = await PostAsync(url, request, null, _options, cancellationToken).ConfigureAwait(false);
         return ParseImageGenerationResponse(json);
@@ -93,8 +93,8 @@ public partial class OpenAIChatClient : OpenAIClientBase,
     /// <returns>音频字节流（格式由 request.ResponseFormat 决定，默认 mp3）</returns>
     public virtual async Task<Byte[]> SpeechAsync(SpeechRequest request, CancellationToken cancellationToken = default)
     {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        var url = endpoint + "/v1/audio/speech";
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段（原手动判 /v1 逻辑收敛于此）
+        var url = CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), "/v1/audio/speech");
 
         return await PostBinaryAsync(url, request, null, _options, cancellationToken).ConfigureAwait(false);
     }
@@ -102,13 +102,33 @@ public partial class OpenAIChatClient : OpenAIClientBase,
     /// <summary>语音合成（TTS）。兼容 OpenAI /v1/audio/speech 接口，返回音频字节流</summary>
     /// <param name="input">要合成的文本内容</param>
     /// <param name="voice">音色名称。如 longxiaochun、alloy</param>
-    /// <param name="model">TTS 模型编码。如 cosyvoice-v2、tts-1</param>
+    /// <param name="model">TTS 模型编码。如 cosyvoice-v3.5-flash、tts-1</param>
     /// <param name="responseFormat">音频格式。mp3（默认）/ wav / opus / flac / pcm</param>
     /// <param name="speed">语速倍率。0.25~4.0，默认 1.0</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>音频字节流（格式由 responseFormat 决定，默认 mp3）</returns>
     public virtual Task<Byte[]> SpeechAsync(String input, String voice, String? model = null, String? responseFormat = null, Double? speed = null, CancellationToken cancellationToken = default)
         => SpeechAsync(new SpeechRequest { Input = input, Voice = voice, Model = model ?? "tts-1", ResponseFormat = responseFormat, Speed = speed }, cancellationToken);
+
+    /// <summary>流式语音合成。以异步枚举方式逐段返回音频字节流，支持边生成边播放</summary>
+    /// <remarks>
+    /// 暂未实现，默认抛出 <see cref="NotSupportedException"/>。
+    /// DashScope CosyVoice 通过 WebSocket（wss://dashscope.aliyuncs.com/api-ws/v1/inference）实现流式合成，
+    /// 详见 Doc/《CosyVoice WebSocket 流式合成.md》。
+    /// OpenAI 兼容服务商通过 SSE 分块 /v1/audio/speech?stream=true 实现。
+    /// </remarks>
+    /// <param name="request">语音合成请求</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>逐段返回音频字节分片</returns>
+    public virtual IAsyncEnumerable<Byte[]> SpeechStreamAsync(SpeechRequest request, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException($"[{nameof(ISpeechClient)}] 流式语音合成暂未实现");
+    }
+
+    /// <summary>判断是否支持指定模型的流式语音合成（WebSocket / SSE 逻片式）。默认返回 false，子类按需重写</summary>
+    /// <param name="modelId">要判断的模型编码或 null（将使用当前客户端默认模型）</param>
+    /// <returns>支持流式合成返回 true</returns>
+    public virtual Boolean SupportsSpeechStreaming(String? modelId) => false;
     #endregion
 
     #region 文生视频
@@ -118,8 +138,7 @@ public partial class OpenAIChatClient : OpenAIClientBase,
     /// <returns>任务提交响应，含 TaskId</returns>
     public virtual async Task<VideoTaskSubmitResponse> SubmitVideoGenerationAsync(VideoGenerationRequest request, CancellationToken cancellationToken = default)
     {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        var url = endpoint + "/v1/video/generations";
+        var url = CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), "/v1/video/generations");
 
         var json = await PostAsync(url, request, null, _options, cancellationToken).ConfigureAwait(false);
         return ParseVideoTaskSubmitResponse(json);
@@ -131,8 +150,7 @@ public partial class OpenAIChatClient : OpenAIClientBase,
     /// <returns>任务状态响应</returns>
     public virtual async Task<VideoTaskStatusResponse> GetVideoTaskAsync(String taskId, CancellationToken cancellationToken = default)
     {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        var url = endpoint + $"/v1/video/generations/{taskId}";
+        var url = CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), $"/v1/video/generations/{taskId}");
 
         var json = await GetAsync(url, null, _options, cancellationToken).ConfigureAwait(false);
         return ParseVideoTaskStatusResponse(json);

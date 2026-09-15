@@ -1,4 +1,5 @@
 ﻿using NewLife.AI.Models;
+using NewLife.Serialization;
 
 namespace NewLife.AI.Clients.OpenAI;
 
@@ -7,14 +8,18 @@ namespace NewLife.AI.Clients.OpenAI;
 /// 与标准 OpenAI 协议的主要差异：
 /// <list type="bullet">
 /// <item>思考控制：<see cref="IChatRequest.EnableThinking"/> 映射为 <c>thinking: {type: "enabled"|"disabled"}</c>，而非 OpenAI 不支持的 <c>enable_thinking</c></item>
-/// <item>deepseek-reasoner 始终输出 <c>reasoning_content</c> 思维链，不支持 temperature/top_p/presence_penalty/frequency_penalty 及 Function Calling</item>
+/// <item>deepseek-reasoner 始终输出 <c>reasoning_content</c> 思维链，不支持 temperature/top_p/presence_penalty/frequency_penalty 及部分采样参数</item>
 /// <item>reasoning_content 字段由基类 <see cref="OpenAIClientBase.ParseChatMessage"/> 负责解析，无需额外处理</item>
+/// <item>V4 系列（deepseek-v4-flash/v4-pro）统一上下文 1M，支持工具调用；旧 deepseek-chat/reasoner 作为兼容别名保留</item>
+/// <item>模型能力推断（思考/工具/上下文/价格）由 deepseek 模型家族统一接管（见 <see cref="ModelFamilies"/>），
+/// 跨平台（DashScope/腾讯/火山等）托管 deepseek 模型时能力一致，服务商价格可精确注册覆盖</item>
 /// </list>
 /// </remarks>
 [AiClient("DeepSeek", "深度求索", "https://api.deepseek.com", Description = "DeepSeek 系列推理和对话模型", Order = 2)]
-[AiClientModel("deepseek-chat", "DeepSeek Chat", Code = "DeepSeek", FunctionCalling = true)]
-[AiClientModel("deepseek-reasoner", "DeepSeek Reasoner", Code = "DeepSeek", Thinking = true)]
-public class DeepSeekChatClient : OpenAIClientBase
+[AiClientModel("deepseek-v4-pro", "DeepSeek V4 Pro", Code = "DeepSeek", Thinking = true, FunctionCalling = true, ReasoningEfforts = "high,max", InputPrice = 9, OutputPrice = 27, CachedInputPrice = 0.3)]
+[AiClientModel("deepseek-v4-flash", "DeepSeek V4 Flash", Code = "DeepSeek", Thinking = true, FunctionCalling = true, ReasoningEfforts = "high,max", InputPrice = 3, OutputPrice = 9, CachedInputPrice = 0.1)]
+[AiClientModel("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision", Code = "DeepSeek", Thinking = true, FunctionCalling = true, Vision = true, ReasoningEfforts = "high,max", InputPrice = 3, OutputPrice = 9, CachedInputPrice = 0.1)]
+public class DeepSeekChatClient : OpenAIClientBase, IBalanceClient
 {
     #region 属性
     /// <inheritdoc/>
@@ -73,6 +78,45 @@ public class DeepSeekChatClient : OpenAIClientBase
         }
 
         return dic;
+    }
+    #endregion
+
+    #region 余额查询
+    /// <summary>查询 DeepSeek 账号余额。调用 GET https://api.deepseek.com/user/balance</summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>余额信息，查询失败时返回 null</returns>
+    public async Task<BalanceResponse?> GetBalanceAsync(CancellationToken cancellationToken = default)
+    {
+        var url = BuildApiUrl("/user/balance");
+        var json = await TryGetAsync(url, _options, cancellationToken).ConfigureAwait(false);
+        if (json == null) return null;
+
+        var dic = JsonParser.Decode(json);
+        if (dic == null) return null;
+
+        var response = new BalanceResponse
+        {
+            IsAvailable = dic.TryGetValue("is_available", out var ia) && ia.ToBoolean(),
+        };
+
+        if (dic["balance_infos"] is IList<Object> list)
+        {
+            var infos = new List<BalanceInfo>(list.Count);
+            foreach (var item in list)
+            {
+                if (item is not IDictionary<String, Object> d) continue;
+                infos.Add(new BalanceInfo
+                {
+                    Currency = d.TryGetValue("currency", out var c) ? c as String : null,
+                    TotalBalance = d.TryGetValue("total_balance", out var tb) ? tb.ToDecimal() : null,
+                    GrantedBalance = d.TryGetValue("granted_balance", out var gb) ? gb.ToDecimal() : null,
+                    ToppedUpBalance = d.TryGetValue("topped_up_balance", out var tub) ? tub.ToDecimal() : null,
+                });
+            }
+            response.BalanceInfos = [.. infos];
+        }
+
+        return response;
     }
     #endregion
 }

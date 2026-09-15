@@ -143,7 +143,7 @@ public class InMemoryChatApplicationService
 
         var modelCode = _conversations.TryGetValue(source.ConversationId, out var conv) ? conv.ModelId.ToString() : "qwen-max";
         var assistantId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        yield return ChatStreamEvent.MessageStart(assistantId, modelCode, source.ThinkingMode);
+        yield return ChatStreamEvent.MessageStart(assistantId, modelCode);
 
         var answer = "这是编辑后重新生成的流式回复。";
         var content = new StringBuilder();
@@ -190,7 +190,7 @@ public class InMemoryChatApplicationService
         }
 
         var modelCode = _conversations.TryGetValue(source.ConversationId, out var conv) ? conv.ModelId.ToString() : "qwen-max";
-        yield return ChatStreamEvent.MessageStart(source.Id, modelCode, source.ThinkingMode);
+        yield return ChatStreamEvent.MessageStart(source.Id, modelCode);
 
         var answer = "这是重新生成的流式回复。";
         var content = new StringBuilder();
@@ -234,7 +234,7 @@ public class InMemoryChatApplicationService
 
         // message_start（含模型和思考模式）
         var modelCode = _conversations.TryGetValue(conversationId, out var conv) ? conv.ModelId.ToString() : "qwen-max";
-        yield return ChatStreamEvent.MessageStart(assistantMessageId, modelCode, request.ThinkingMode);
+        yield return ChatStreamEvent.MessageStart(assistantMessageId, modelCode);
 
         var answer = "这是流式回复骨架。后续可接入真实模型推理与上下文管理。";
         var chunks = answer.Split('。', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -305,9 +305,8 @@ public class InMemoryChatApplicationService
     {
         var token = Guid.NewGuid().ToString("N");
         var createTime = DateTime.Now;
-        DateTime? expireTime = null;
-        if (request.ExpireHours is > 0)
-            expireTime = createTime.AddHours(request.ExpireHours.Value);
+        var mins = request.ExpireMinutes is > 0 ? request.ExpireMinutes.Value : 30;
+        var expireTime = (DateTime?)createTime.AddMinutes(mins);
 
         _shares[token] = (conversationId, createTime, expireTime);
         return Task.FromResult(new ShareLinkDto($"/api/share/{token}", createTime, expireTime));
@@ -335,9 +334,9 @@ public class InMemoryChatApplicationService
     {
         var models = new[]
         {
-            new ModelInfoDto(1, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, 131_072, "Qwen"),
-            new ModelInfoDto(2, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, 65_536, "DeepSeek"),
-            new ModelInfoDto(3, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, 128_000, "OpenAI")
+            new ModelInfoDto(1, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, false, 131_072, null, "Qwen"),
+            new ModelInfoDto(2, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, false, 65_536, null, "DeepSeek"),
+            new ModelInfoDto(3, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, false, 128_000, null, "OpenAI")
         };
         return Task.FromResult(models);
     }

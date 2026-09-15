@@ -79,29 +79,13 @@ public partial class AppKey
     [BindColumn("ExpireTime", "过期时间。null表示永不过期", "")]
     public DateTime ExpireTime { get => _ExpireTime; set { if (OnPropertyChanging("ExpireTime", value)) { _ExpireTime = value; OnPropertyChanged("ExpireTime"); } } }
 
-    private DateTime _LastCallTime;
-    /// <summary>最后调用时间</summary>
-    [DisplayName("最后调用时间")]
-    [Description("最后调用时间")]
-    [DataObjectField(false, false, true, 0)]
-    [BindColumn("LastCallTime", "最后调用时间", "")]
-    public DateTime LastCallTime { get => _LastCallTime; set { if (OnPropertyChanging("LastCallTime", value)) { _LastCallTime = value; OnPropertyChanged("LastCallTime"); } } }
-
-    private Int64 _Calls;
-    /// <summary>调用次数。累计API请求数</summary>
-    [DisplayName("调用次数")]
-    [Description("调用次数。累计API请求数")]
-    [DataObjectField(false, false, false, 0)]
-    [BindColumn("Calls", "调用次数。累计API请求数", "")]
-    public Int64 Calls { get => _Calls; set { if (OnPropertyChanging("Calls", value)) { _Calls = value; OnPropertyChanged("Calls"); } } }
-
-    private Int64 _TotalTokens;
-    /// <summary>总Token数。累计消耗Token</summary>
-    [DisplayName("总Token数")]
-    [Description("总Token数。累计消耗Token")]
-    [DataObjectField(false, false, false, 0)]
-    [BindColumn("TotalTokens", "总Token数。累计消耗Token", "")]
-    public Int64 TotalTokens { get => _TotalTokens; set { if (OnPropertyChanging("TotalTokens", value)) { _TotalTokens = value; OnPropertyChanged("TotalTokens"); } } }
+    private String? _SystemPrompt;
+    /// <summary>系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词</summary>
+    [DisplayName("系统指令")]
+    [Description("系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词")]
+    [DataObjectField(false, false, true, -1)]
+    [BindColumn("SystemPrompt", "系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词", "", ItemType = "markdown", ShowIn = "Auto,-List,-Search")]
+    public String? SystemPrompt { get => _SystemPrompt; set { if (OnPropertyChanging("SystemPrompt", value)) { _SystemPrompt = value; OnPropertyChanged("SystemPrompt"); } } }
 
     private Int32 _CreateUserID;
     /// <summary>创建用户</summary>
@@ -182,9 +166,7 @@ public partial class AppKey
             "Models" => _Models,
             "Enable" => _Enable,
             "ExpireTime" => _ExpireTime,
-            "LastCallTime" => _LastCallTime,
-            "Calls" => _Calls,
-            "TotalTokens" => _TotalTokens,
+            "SystemPrompt" => _SystemPrompt,
             "CreateUserID" => _CreateUserID,
             "CreateIP" => _CreateIP,
             "CreateTime" => _CreateTime,
@@ -205,9 +187,7 @@ public partial class AppKey
                 case "Models": _Models = Convert.ToString(value); break;
                 case "Enable": _Enable = value.ToBoolean(); break;
                 case "ExpireTime": _ExpireTime = value.ToDateTime(); break;
-                case "LastCallTime": _LastCallTime = value.ToDateTime(); break;
-                case "Calls": _Calls = value.ToLong(); break;
-                case "TotalTokens": _TotalTokens = value.ToLong(); break;
+                case "SystemPrompt": _SystemPrompt = Convert.ToString(value); break;
                 case "CreateUserID": _CreateUserID = value.ToInt(); break;
                 case "CreateIP": _CreateIP = Convert.ToString(value); break;
                 case "CreateTime": _CreateTime = value.ToDateTime(); break;
@@ -323,14 +303,8 @@ public partial class AppKey
         /// <summary>过期时间。null表示永不过期</summary>
         public static readonly Field ExpireTime = FindByName("ExpireTime");
 
-        /// <summary>最后调用时间</summary>
-        public static readonly Field LastCallTime = FindByName("LastCallTime");
-
-        /// <summary>调用次数。累计API请求数</summary>
-        public static readonly Field Calls = FindByName("Calls");
-
-        /// <summary>总Token数。累计消耗Token</summary>
-        public static readonly Field TotalTokens = FindByName("TotalTokens");
+        /// <summary>系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词</summary>
+        public static readonly Field SystemPrompt = FindByName("SystemPrompt");
 
         /// <summary>创建用户</summary>
         public static readonly Field CreateUserID = FindByName("CreateUserID");
@@ -380,14 +354,8 @@ public partial class AppKey
         /// <summary>过期时间。null表示永不过期</summary>
         public const String ExpireTime = "ExpireTime";
 
-        /// <summary>最后调用时间</summary>
-        public const String LastCallTime = "LastCallTime";
-
-        /// <summary>调用次数。累计API请求数</summary>
-        public const String Calls = "Calls";
-
-        /// <summary>总Token数。累计消耗Token</summary>
-        public const String TotalTokens = "TotalTokens";
+        /// <summary>系统指令。通过该密钥接入的请求将在对话系统消息首部注入此提示词</summary>
+        public const String SystemPrompt = "SystemPrompt";
 
         /// <summary>创建用户</summary>
         public const String CreateUserID = "CreateUserID";

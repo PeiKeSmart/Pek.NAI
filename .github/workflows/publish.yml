@@ -14,12 +14,12 @@ jobs:
 
     - uses: pnpm/action-setup@v4
       with:
-        version: latest
+        version: 10.17.1
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 20
+        node-version: 22
         cache: pnpm
         cache-dependency-path: Web/pnpm-lock.yaml
 
@@ -34,12 +34,14 @@ jobs:
     - name: Build frontend
       run: pnpm --dir Web build
 
-    - name: Pack Pek.NAI
-      run: dotnet pack -c Release -o out Pek.NAI/Pek.NAI.csproj
+    - name: Pack NewLife.AI
+      run: dotnet pack -c Release -o out NewLife.AI/NewLife.AI.csproj
 
-    - name: Pack Pek.ChatAI
-      run: dotnet pack -c Release -o out Pek.ChatAI/Pek.ChatAI.csproj
+    - name: Pack NewLife.AI.Extensions
+      run: dotnet pack -c Release -o out NewLife.AI.Extensions/NewLife.AI.Extensions.csproj
+
+    - name: Pack ChatAI
+      run: dotnet pack -c Release -o out NewLife.ChatAI/NewLife.ChatAI.csproj
 
     - name: Publish
       run: dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}
-           dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://nuget.chuangchu.net/v3/index.json --api-key ${{ secrets.mynugetKey }}

@@ -17,9 +17,9 @@ namespace NewLife.AI.Clients.Anthropic;
 /// </remarks>
 /// <remarks>用连接选项初始化 Anthropic 客户端</remarks>
 [AiClient("Anthropic", "Anthropic", "https://api.anthropic.com", Protocol = "AnthropicMessages", Description = "Anthropic Claude 系列模型")]
-[AiClientModel("claude-opus-4-6", "Claude Opus 4.6", Thinking = true, Vision = true)]
-[AiClientModel("claude-sonnet-4-6", "Claude Sonnet 4.6", Thinking = true, Vision = true)]
-[AiClientModel("claude-haiku-4-5", "Claude Haiku 4.5", Thinking = true, Vision = true)]
+[AiClientModel("claude-opus-4-7", "Claude Opus 4.7", Thinking = true, Vision = true, InputPrice = 34.5, OutputPrice = 172.5, CachedInputPrice = 3.45, CacheCreationPrice = 43.1)]
+[AiClientModel("claude-sonnet-4-6", "Claude Sonnet 4.6", Thinking = true, Vision = true, InputPrice = 20.7, OutputPrice = 103.5, CachedInputPrice = 2.07)]
+[AiClientModel("claude-haiku-4-5", "Claude Haiku 4.5", Thinking = true, Vision = true, InputPrice = 6.9, OutputPrice = 34.5, CachedInputPrice = 0.69)]
 public class AnthropicChatClient : AiClientBase
 {
     #region 属性
@@ -30,11 +30,15 @@ public class AnthropicChatClient : AiClientBase
     protected virtual String ApiVersion => "2023-06-01";
 
     /// <summary>默认Json序列化选项</summary>
-    public static JsonOptions DefaultJsonOptions = new()
+    public static readonly JsonOptions DefaultJsonOptions = new()
     {
         PropertyNaming = PropertyNaming.SnakeCaseLower,
         IgnoreNullValues = true,
     };
+
+    /// <summary>流式工具调用块累积状态。key=内容块索引（Anthropic content_block index），值=工具 Id 与名称；
+    /// 供 content_block_start(tool_use) → input_json_delta 跨事件产出 OpenAI 兼容 tool_call 增量块</summary>
+    private readonly Dictionary<Int32, (String Id, String Name)> _toolBlocks = [];
     #endregion
 
     #region 构造
@@ -53,6 +57,9 @@ public class AnthropicChatClient : AiClientBase
     /// <summary>流式对话</summary>
     protected override async IAsyncEnumerable<IChatResponse> ChatStreamAsync(IChatRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // 每次流式调用独立：清理上一轮的流式工具块累积状态（同客户端多次流式调用复用）
+        _toolBlocks.Clear();
+
         var url = BuildUrl(request);
         var body = BuildRequest(request);
 
@@ -79,6 +86,15 @@ public class AnthropicChatClient : AiClientBase
             var data = line.Substring(5).Trim();
             if (data.Length == 0) continue;
 
+            // 流式错误：Anthropic 在 event:error 后返回 {"type":"error","error":{"type":"...","message":"..."}}
+            if (lastEvent == "error")
+            {
+                var errDic = JsonParser.Decode(data);
+                var err = errDic?["error"] as IDictionary<String, Object>;
+                var message = err?["message"] as String ?? data;
+                throw new HttpRequestException($"[{Name}] 流式错误 {message}");
+            }
+
             var chunk = ParseChunk(data, request, lastEvent);
             if (chunk != null)
                 yield return chunk;
@@ -89,10 +105,8 @@ public class AnthropicChatClient : AiClientBase
     #region 辅助
     /// <summary>构建请求地址。子类可重写此方法根据请求参数动态调整路径（如不同模型使用不同端点）</summary>
     protected override String BuildUrl(IChatRequest request)
-    {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        return $"{endpoint}/v1/messages";
-    }
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段，避免 .../v1/v1/messages
+        => CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), "/v1/messages");
 
     /// <summary>构建 Anthropic 请求体</summary>
     /// <param name="request">请求</param>
@@ -111,8 +125,51 @@ public class AnthropicChatClient : AiClientBase
     }
 
     /// <summary>解析 Anthropic 流式 chunk</summary>
+    /// <remarks>
+    /// 流式工具调用：Anthropic 以 content_block_start(type=tool_use，带 id/name) + content_block_delta(input_json_delta，
+    /// 带 partial_json 分片) 下发，跨事件累积后转 OpenAI 兼容 tool_call 增量块（首块带 Id/Name、参数分片随
+    /// 增量块追加），供消费端 <c>MergeToolCallDelta</c> 按 Id 合并——否则 Anthropic 流式工具调用整链丢失。
+    /// </remarks>
     protected override IChatResponse? ParseChunk(String data, IChatRequest request, String? lastEvent)
-        => data.ToJsonEntity<AnthropicStreamEvent>(JsonOptions)?.ToChunkResponse(request.Model);
+    {
+        var ev = data.ToJsonEntity<AnthropicStreamEvent>(JsonOptions);
+        if (ev == null) return null;
+
+        var index = ev.Index ?? 0;
+        if (ev.Type == "content_block_start" && ev.ContentBlock?.Type == "tool_use")
+        {
+            // tool_use 块开始：记录 Id/Name，产出带 Id/Name 的首个增量块（参数为空串，后续 delta 追加）
+            var id = ev.ContentBlock.Id ?? "";
+            var name = ev.ContentBlock.Name ?? "";
+            if (name.IsNullOrEmpty()) return null;
+            _toolBlocks[index] = (id, name);
+            return BuildToolCallDelta(request.Model, id, name, "");
+        }
+        if (ev.Type == "content_block_delta" && ev.Delta?.Type == "input_json_delta")
+        {
+            // 参数分片增量：带 Id/Name 产出，消费端按 Id 合并追加
+            if (_toolBlocks.TryGetValue(index, out var tb) && !ev.Delta.PartialJson.IsNullOrEmpty())
+                return BuildToolCallDelta(request.Model, tb.Id, tb.Name, ev.Delta.PartialJson);
+            return null;
+        }
+        if (ev.Type == "content_block_stop")
+            _toolBlocks.Remove(index);
+
+        return ev.ToChunkResponse(request.Model);
+    }
+
+    /// <summary>构建 OpenAI 兼容的工具调用增量块。Anthropic 流式工具参数分片经各块 Arguments 追加累积为完整 JSON</summary>
+    /// <param name="model">模型编码</param>
+    /// <param name="id">工具调用编号</param>
+    /// <param name="name">工具名称</param>
+    /// <param name="arguments">当前参数分片</param>
+    /// <returns>工具增量块</returns>
+    private static IChatResponse BuildToolCallDelta(String? model, String id, String name, String arguments)
+    {
+        var response = new ChatResponse { Model = model, Object = "chat.completion.chunk" };
+        response.AddToolCallDelta(id, name, arguments);
+        return response;
+    }
 
     /// <summary>Anthropic 将单次 LLM 调用的 Usage 拆成两个互补 chunk：
     /// message_start 只含 InputTokens，message_delta 只含 OutputTokens。

@@ -1,6 +1,7 @@
 ﻿using NewLife.AI.Models;
 using NewLife.AI.Tools;
 using NewLife.Collections;
+using NewLife.Serialization;
 
 namespace NewLife.AI.Agents;
 
@@ -29,7 +30,7 @@ public static class AgentAsTool
         var name = toolName ?? ToSnakeCase(agent.Name);
         var description = agent.Description ?? $"调用 {agent.Name} 代理处理任务";
 
-        registry.AddTool(name, (args, ct) => InvokeAgentAsync(agent, args, ct), description);
+        registry.AddTool(name, (args, ctx, ct) => InvokeAgentAsync(agent, args, ct), description);
     }
 
     /// <summary>创建表示 Agent 能力的 ChatTool 定义（不注册到 ToolRegistry）</summary>
@@ -72,12 +73,12 @@ public static class AgentAsTool
     {
         // 解析输入消息
         var content = "请处理任务";
-        if (!String.IsNullOrWhiteSpace(arguments))
+        if (!arguments.IsNullOrWhiteSpace())
         {
             // 简单 JSON 解析: {"message": "xxx"}
             try
             {
-                var dic = NewLife.Serialization.JsonParser.Decode(arguments);
+                var dic = JsonParser.Decode(arguments);
                 if (dic != null && dic.TryGetValue("message", out var msgObj) && msgObj is String msg && !String.IsNullOrEmpty(msg))
                     content = msg;
             }

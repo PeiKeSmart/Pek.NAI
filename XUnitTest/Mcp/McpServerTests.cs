@@ -78,7 +78,8 @@ public class McpServerTests
         // Assert
         Assert.NotNull(server.Manager);
         Assert.Equal(Logger.Null, server.Log);
-        Assert.Null(server.Tracer);
+        // A-27：应从本服务器解析出工具管理器（tools/call 可用）
+        Assert.Same(server.Manager, ((IServiceProvider)server).GetService(typeof(McpToolManager)));
     }
     #endregion
 
@@ -92,7 +93,7 @@ public class McpServerTests
 
         // Act & Assert
         var ex = Assert.Throws<ApiException>(() => server.Process(null!, context));
-        Assert.Equal(ApiCode.BadRequest, ex.Code);
+        Assert.Equal(McpErrorCode.InvalidRequest, ex.Code);
         Assert.Equal("异常请求！", ex.Message);
     }
 
@@ -115,7 +116,7 @@ public class McpServerTests
 
         var error = response.Error as JsonRpcError;
         Assert.NotNull(error);
-        Assert.Equal(ApiCode.NotFound, error.Code);
+        Assert.Equal(McpErrorCode.MethodNotFound, error.Code);
         Assert.Contains("not found in MCP server capabilities", error.Message);
     }
 
@@ -146,9 +147,9 @@ public class McpServerTests
     }
 
     [Fact]
-    public void Process_WithInitializedNotification_ShouldReturnInitializeResult()
+    public void Process_WithInitializedNotification_ShouldReturnNull()
     {
-        // Arrange
+        // JSON-RPC notification（无 Id）不得响应。A-29 修复前错误地返回了 InitializeResult
         var server = new McpServer();
         var context = CreateTestContext();
         var request = new JsonRpcRequest("2.0", "notifications/initialized", null, null);
@@ -157,10 +158,7 @@ public class McpServerTests
         var response = server.Process(request, context);
 
         // Assert
-        Assert.Equal("2.0", response.JsonRpc);
-        Assert.NotNull(response.Result);
-        Assert.Null(response.Error);
-        Assert.Null(response.Id);
+        Assert.Null(response);
     }
     #endregion
 
@@ -274,7 +272,7 @@ public class McpServerTests
 
         var error = response.Error as JsonRpcError;
         Assert.NotNull(error);
-        Assert.Equal(ApiCode.BadRequest, error.Code);
+        Assert.Equal(McpErrorCode.InvalidParams, error.Code);
         Assert.Contains("Tool call parameters cannot be null", error.Message);
     }
 
@@ -297,7 +295,8 @@ public class McpServerTests
 
         var error = response.Error as JsonRpcError;
         Assert.NotNull(error);
-        Assert.Equal(ApiCode.InternalServerError, error.Code);
+        // 参数无法转换属于协议级无效参数（-32602）
+        Assert.Equal(McpErrorCode.InvalidParams, error.Code);
         // 由于JsonHelper.Convert会抛出不同的异常消息，我们只验证有错误消息即可
         Assert.False(String.IsNullOrEmpty(error.Message));
     }
@@ -321,7 +320,7 @@ public class McpServerTests
 
         var error = response.Error as JsonRpcError;
         Assert.NotNull(error);
-        Assert.Equal(ApiCode.NotFound, error.Code);
+        Assert.Equal(McpErrorCode.MethodNotFound, error.Code);
     }
 
     [Fact]
@@ -340,7 +339,7 @@ public class McpServerTests
 
         var error = response.Error as JsonRpcError;
         Assert.NotNull(error);
-        Assert.Equal(ApiCode.BadRequest, error.Code);
+        Assert.Equal(McpErrorCode.InvalidParams, error.Code);
     }
     #endregion
 
@@ -388,8 +387,8 @@ public class McpServerTests
         // Act
         server.WriteLog("测试日志 {0}", "参数");
 
-        // Assert
-        Assert.Equal("测试日志 参数", mockLog.LastMessage);
+        // Assert：ApiHost.WriteLog 带 [Name] 前缀（Name="Mcp"）
+        Assert.Equal("[Mcp]测试日志 参数", mockLog.LastMessage);
     }
 
     /// <summary>Mock日志实现</summary>

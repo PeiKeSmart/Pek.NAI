@@ -156,12 +156,8 @@ public partial class OpenAIChatClient
     private EmbeddingClientMetadata? _embeddingMetadata;
 
     /// <summary>嵌入客户端元数据。实现 <see cref="IEmbeddingClient"/></summary>
-    public EmbeddingClientMetadata Metadata => _embeddingMetadata ??= new EmbeddingClientMetadata
-    {
-        ProviderName = Name,
-        Endpoint = _options.GetEndpoint(DefaultEndpoint),
-        DefaultModel = _options.Model,
-    };
+    public EmbeddingClientMetadata Metadata => _embeddingMetadata ??=
+        new EmbeddingClientMetadata(Name, _options.GetEndpoint(DefaultEndpoint), _options.Model);
 
     /// <summary>嵌入路径。默认 /v1/embeddings，子类可重写以适配服务商差异</summary>
     protected virtual String EmbeddingPath => "/v1/embeddings";
@@ -187,6 +183,16 @@ public partial class OpenAIChatClient
         if (request.Dimensions != null) dic["dimensions"] = request.Dimensions.Value;
         if (request.EncodingFormat != null) dic["encoding_format"] = request.EncodingFormat;
         if (request.User != null) dic["user"] = request.User;
+
+        // IExtend 扩展参数，由模型定制化设置（如 EmbeddingModelSetting）传入
+        if (request.Items is { Count: > 0 })
+        {
+            foreach (var kv in request.Items)
+            {
+                if (kv.Value != null)
+                    dic[kv.Key] = kv.Value;
+            }
+        }
 
         var body = JsonHost.Write(dic);
         var url = BuildApiUrl(EmbeddingPath);

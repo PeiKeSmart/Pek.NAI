@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer'
 import { Icon } from '@/components/common/Icon'
 import { fetchSharedConversation, type SharedConversationContent } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, smoothScrollIntoView } from '@/lib/utils'
 
 export function SharePage() {
   const { token } = useParams<{ token: string }>()
@@ -12,6 +12,17 @@ export function SharePage() {
   const [data, setData] = useState<SharedConversationContent | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
+  const anchorRef = useRef<HTMLDivElement | null>(null)
+
+  // 分享页是独立的全屏滚动页，需覆盖全局 overflow:hidden（该规则是为 ChatLayout 固定布局设置的）
+  useEffect(() => {
+    document.documentElement.style.overflow = 'auto'
+    document.body.style.overflow = 'auto'
+    return () => {
+      document.documentElement.style.overflow = ''
+      document.body.style.overflow = ''
+    }
+  }, [])
 
   const safeTime = (s: string | null | undefined, style: 'time' | 'full' = 'full'): string | null => {
     if (!s) return null
@@ -33,10 +44,25 @@ export function SharePage() {
       .finally(() => setLoading(false))
   }, [token])
 
+  useEffect(() => {
+    if (data) {
+      if (data.snapshotTitle) {
+        document.title = data.snapshotTitle
+      } else if (data.siteTitle) {
+        document.title = data.siteTitle
+      } else {
+        document.title = t('sharePage.title')
+      }
+      if (anchorRef.current) {
+        smoothScrollIntoView(anchorRef.current, { block: 'center' })
+      }
+    }
+  }, [data, t])
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="flex items-center text-gray-400">
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-surface-1)]">
+        <div className="flex items-center text-[var(--color-text-tertiary)]">
           <Icon name="hourglass_empty" className="animate-spin mr-2" />
           {t('common.loading')}
         </div>
@@ -46,26 +72,31 @@ export function SharePage() {
 
   if (notFound || !data) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <Icon name="link_off" size="xl" className="text-gray-300 dark:text-gray-600 mb-4" />
-        <h1 className="text-xl font-bold text-gray-700 dark:text-gray-300 mb-2">{t('sharePage.notFound')}</h1>
-        <p className="text-gray-500 dark:text-gray-400">{t('sharePage.notFoundDesc')}</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[var(--color-surface-1)]">
+        <Icon name="link_off" size="xl" className="text-[var(--color-text-muted)] mb-4" />
+        <h1 className="text-xl font-bold text-[var(--color-text-secondary)] mb-2">{t('sharePage.notFound')}</h1>
+        <p className="text-[var(--color-text-secondary)]">{t('sharePage.notFoundDesc')}</p>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-[var(--color-surface-1)]">
       {/* Header */}
       <header className="sticky top-0 z-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur border-b border-gray-200 dark:border-gray-800">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Icon name="share" className="text-primary" />
-            <span className="font-semibold text-gray-900 dark:text-white">{t('sharePage.title')}</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{data.snapshotTitle || t('sharePage.title')}</span>
           </div>
-          <div className="text-xs text-gray-400">
-            {t('sharePage.sharedAt')}: {safeTime(data.createTime) ?? '—'}
-            {data.expireTime && safeTime(data.expireTime) && ` \u00b7 ${t('sharePage.expiresAt')}: ${safeTime(data.expireTime)}`}
+          <div className="text-xs text-gray-400 text-right">
+            <div>
+              {t('sharePage.sharedAt')}: {safeTime(data.createTime) ?? '—'}
+              {data.expireTime && safeTime(data.expireTime) && ` \u00b7 ${t('sharePage.expiresAt')}: ${safeTime(data.expireTime)}`}
+            </div>
+            {data.creatorName && (
+              <div>{t('sharePage.sharedBy')}：{data.creatorName}</div>
+            )}
           </div>
         </div>
       </header>
@@ -82,15 +113,22 @@ export function SharePage() {
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
         {data.messages.map((msg) => {
           const isUser = msg.role === 'user'
+          const isAnchor = msg.id === data.anchorMessageId
           const msgTime = safeTime(msg.createdAt, 'time')
+          const roleLabel = isUser
+            ? (data.creatorName || t('sharePage.you'))
+            : msg.modelName ? `${t('sharePage.assistant')} \u00b7 ${msg.modelName}` : t('sharePage.assistant')
           return (
             <div
               key={msg.id}
+              id={`msg-${msg.id}`}
+              ref={isAnchor ? anchorRef : undefined}
               className={cn(
                 'rounded-xl px-5 py-4',
                 isUser
                   ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800'
                   : 'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700',
+                isAnchor && 'ring-2 ring-primary/40',
               )}
             >
               {/* Role header */}
@@ -111,17 +149,10 @@ export function SharePage() {
                     isUser ? 'text-blue-700 dark:text-blue-300' : 'text-gray-600 dark:text-gray-300',
                   )}
                 >
-                  {isUser ? t('sharePage.you') : t('sharePage.assistant')}
+                  {roleLabel}
                 </span>
                 {msgTime && <span className="text-[10px] text-gray-400 ml-auto">{msgTime}</span>}
               </div>
-              {/* Thinking */}
-              {msg.thinkingContent && (
-                <details className="mb-3 ml-8">
-                  <summary className="text-xs opacity-60 cursor-pointer">{t('chat.thinkingProcess')}</summary>
-                  <div className="mt-1 text-xs opacity-70 whitespace-pre-wrap">{msg.thinkingContent}</div>
-                </details>
-              )}
               {/* Content */}
               <div className="ml-8">
                 {isUser ? (

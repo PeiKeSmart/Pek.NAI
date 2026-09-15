@@ -26,32 +26,41 @@ const defaultSettings: SystemSettings = {
   name: '',
   siteTitle: '',
   logoUrl: '',
+  systemInstruction: '',
   welcomeMessage: '',
+  welcomeSubtitle: '',
+  supportText: '',
+  supportUrl: '',
+  supportPosition: 0,
   autoGenerateTitle: true,
+  errorGuidance: '',
   defaultModel: 0,
   defaultThinkingMode: 0,
-  defaultContextRounds: 10,
-  maxAttachmentSize: 10,
-  maxAttachmentCount: 5,
-  allowedExtensions: '',
-  defaultImageSize: '1024x1024',
-  shareExpireDays: 7,
-  enableGateway: false,
-  gatewayRateLimit: 0,
-  upstreamRetryCount: 2,
-  enableGatewayRecording: false,
+  defaultContextRounds: 20,
+  enableUserIsolation: false,
+  rerankModel: '',
+  maxAttachmentSize: 20,
+  allowedExtensions: '.jpg,.jpeg,.png,.gif,.webp,.pdf,.docx,.doc,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv',
+  defaultImageSize: '1024*1024',
+  shareExpireMinutes: 30,
+  allowAnonymousShare: false,
+  enableGateway: true,
+  gatewayRateLimit: 60,
+  enableGatewayDomainMode: false,
   enableFunctionCalling: true,
   enableMcp: true,
-  enableSuggestedQuestionCache: true,
-  streamingSpeed: 3,
-  toolAdvertiseThreshold: 0,
-  toolResultMaxChars: 4000,
+  toolSlotLimit: 50,
+  toolResultMaxChars: 80000,
+  toolMaxIterations: 10,
+  skillBudgetChars: 150000,
+  querySqlAllowedOperations: 'INSERT,UPDATE',
   enableUsageStats: true,
   backgroundGeneration: true,
-  maxMessagesPerMinute: 0,
-  enableAutoLearning: false,
-  learningModel: '',
-  minLearningContentLength: 200,
+  maxMessagesPerMinute: 20,
+  enableAutoLearning: true,
+  lightweightModel: '',
+  embedModel: '',
+  minLearningContentLength: 50,
 }
 
 export function SystemSettingsModal({ open, onClose }: SystemSettingsModalProps) {
@@ -61,16 +70,18 @@ export function SystemSettingsModal({ open, onClose }: SystemSettingsModalProps)
   const [models, setModels] = useState<ModelOption[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
+    setLoadError(false)
     fetchSystemSettings()
       .then(({ models: m, ...rest }) => {
         setSettings(rest)
         setModels(m)
       })
-      .catch(() => {})
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }, [open])
 
@@ -79,6 +90,8 @@ export function SystemSettingsModal({ open, onClose }: SystemSettingsModalProps)
   }
 
   const handleSave = async () => {
+    // 设置加载失败时禁止保存，防止用前端默认值覆盖后端已生效配置
+    if (loadError) return
     setSaving(true)
     try {
       await saveSystemSettings(settings)
@@ -165,6 +178,8 @@ export function SystemSettingsModal({ open, onClose }: SystemSettingsModalProps)
           <ScrollArea className="flex-1 px-6 py-2 max-md:px-4">
             {loading ? (
               <div className="flex items-center justify-center h-40 text-sm text-gray-400">{t('common.loading')}</div>
+            ) : loadError ? (
+              <div className="flex items-center justify-center h-40 text-sm text-red-400 px-6 text-center">{t('systemSettings.loadError')}</div>
             ) : (
               <>
                 {activeTab === 'siteConfig' && (
@@ -200,7 +215,7 @@ export function SystemSettingsModal({ open, onClose }: SystemSettingsModalProps)
           <div className="flex-shrink-0 border-t border-gray-100 dark:border-gray-800 px-6 py-3 flex justify-end">
             <button
               onClick={handleSave}
-              disabled={saving || loading}
+              disabled={saving || loading || loadError}
               className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {t('common.save')}

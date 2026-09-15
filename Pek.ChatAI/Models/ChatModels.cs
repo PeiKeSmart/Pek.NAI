@@ -1,7 +1,9 @@
-﻿namespace NewLife.ChatAI.Models;
+﻿using NewLife.AI.Models;
+
+namespace NewLife.ChatAI.Models;
 
 /// <summary>模型信息</summary>
-public record ModelInfoDto(Int32 Id, String Code, String Name, Boolean SupportThinking, Boolean SupportFunction, Boolean SupportVision, Boolean SupportAudio, Boolean SupportImage, Boolean SupportVideo, Boolean SupportEmbedding = false, Int32 ContextLength = 0, String Provider = "");
+public record ModelInfoDto(Int32 Id, String Code, String Name, Boolean SupportThinking, Boolean SupportFunction, Boolean SupportVision, Boolean SupportAudio, Boolean SupportImage, Boolean SupportVideo, Boolean SupportSpeech = false, Boolean SupportEmbedding = false, Int32 ContextLength = 0, String? ReasoningEfforts = null, String Provider = "");
 
 #region 提供商管理 DTO
 /// <summary>提供商配置（管理视图）。ApiKey 已脱敏</summary>
@@ -73,6 +75,8 @@ public class ModelManageDto
     public Boolean SupportVideo { get; set; }
     /// <summary>支持嵌入向量</summary>
     public Boolean SupportEmbedding { get; set; }
+    /// <summary>锁定。锁定后禁止程序自动覆盖模型特性和价格</summary>
+    public Boolean Locked { get; set; }
 }
 
 /// <summary>模型设置更新请求。含 Enable 及特性标记</summary>
@@ -96,6 +100,8 @@ public class ModelSettingsDto
     public Boolean SupportVideo { get; set; }
     /// <summary>支持嵌入向量</summary>
     public Boolean SupportEmbedding { get; set; }
+    /// <summary>锁定。null 表示不修改锁定状态，true/false 表示显式设置</summary>
+    public Boolean? Locked { get; set; }
 }
 #endregion
 
@@ -137,8 +143,8 @@ public record UserSettingsDto(String Language, String Theme, Int32 FontSize, Str
     /// <summary>内容区宽度。小屏800/标准960/宽屏1200，按范围匹配：&lt;960 小屏，&gt;=1200 宽屏，其余标准。0表示未设置，等效标准屏</summary>
     public Int32 ContentWidth { get; set; } = 0;
 
-    /// <summary>思考过程收缩。默认是否收缩展示思考过程，默认展开</summary>
-    public Boolean ThinkingCollapsed { get; set; }
+    /// <summary>推理过程布局。Default=0默认, AboveCollapsed=1上方折叠, AboveExpanded=2上方展开, Side=3右侧分栏</summary>
+    public ThinkingLayout ThinkingLayout { get; set; }
 };
 
 /// <summary>用户角色信息</summary>
@@ -173,6 +179,27 @@ public class SystemConfigDto
 
     /// <summary>欢迎语。欢迎页大标题，为空时前端使用默认文案</summary>
     public String? WelcomeMessage { get; set; }
+
+    /// <summary>欢迎副标题。欢迎页大标题下方的引导文案，为空时前端使用默认文案</summary>
+    public String? WelcomeSubtitle { get; set; }
+
+    /// <summary>客服文本。侧边栏或悬浮球中显示的帮助链接文字，为空时不展示</summary>
+    public String? SupportText { get; set; }
+
+    /// <summary>客服链接。点击客服文本跳转的 URL</summary>
+    public String? SupportUrl { get; set; }
+
+    /// <summary>客服入口位置。不显示/侧边栏底部/新对话按钮下方/右下角悬浮球</summary>
+    public SupportPosition SupportPosition { get; set; }
+
+    /// <summary>错误引导文案。对话生成出错时在错误信息下方显示的引导内容，为空时不追加</summary>
+    public String? ErrorGuidance { get; set; }
+
+    /// <summary>分享链接默认有效期（分钟），0 表示永不过期</summary>
+    public Int32 ShareExpireMinutes { get; set; }
+
+    /// <summary>允许匿名访问分享</summary>
+    public Boolean AllowAnonymousShare { get; set; }
 
     /// <summary>欢迎页推荐问题列表</summary>
     public SuggestedQuestionDto[] SuggestedQuestions { get; set; } = [];

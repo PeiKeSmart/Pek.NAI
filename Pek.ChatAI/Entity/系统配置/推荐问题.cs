@@ -17,8 +17,7 @@ namespace NewLife.ChatAI.Entity;
 [Serializable]
 [DataObject]
 [Description("推荐问题。欢迎页展示的推荐问题，支持缓存响应以加速体验")]
-[BindIndex("IX_SuggestedQuestion_Sort", false, "Sort")]
-[BindIndex("IX_SuggestedQuestion_Enable_Sort", false, "Enable,Sort")]
+[BindIndex("IX_SuggestedQuestion_Enable", false, "Enable")]
 [BindTable("SuggestedQuestion", Description = "推荐问题。欢迎页展示的推荐问题，支持缓存响应以加速体验", ConnName = "ChatAI", DbType = DatabaseType.None)]
 public partial class SuggestedQuestion
 {
@@ -47,29 +46,21 @@ public partial class SuggestedQuestion
     [BindColumn("Question", "问题。点击后发送给AI的完整提示词", "")]
     public String? Question { get => _Question; set { if (OnPropertyChanging("Question", value)) { _Question = value; OnPropertyChanged("Question"); } } }
 
-    private String? _Response;
-    /// <summary>响应。缓存的AI回复内容，Markdown格式</summary>
-    [DisplayName("响应")]
-    [Description("响应。缓存的AI回复内容，Markdown格式")]
-    [DataObjectField(false, false, true, -1)]
-    [BindColumn("Response", "响应。缓存的AI回复内容，Markdown格式", "", ItemType = "markdown", ShowIn = "Auto,-List,-Search")]
-    public String? Response { get => _Response; set { if (OnPropertyChanging("Response", value)) { _Response = value; OnPropertyChanged("Response"); } } }
-
-    private String? _ThinkingResponse;
-    /// <summary>推理响应。缓存的思考过程内容</summary>
-    [DisplayName("推理响应")]
-    [Description("推理响应。缓存的思考过程内容")]
-    [DataObjectField(false, false, true, -1)]
-    [BindColumn("ThinkingResponse", "推理响应。缓存的思考过程内容", "", ItemType = "markdown", ShowIn = "Auto,-List,-Search")]
-    public String? ThinkingResponse { get => _ThinkingResponse; set { if (OnPropertyChanging("ThinkingResponse", value)) { _ThinkingResponse = value; OnPropertyChanged("ThinkingResponse"); } } }
-
-    private Int32 _ModelId;
-    /// <summary>模型。生成缓存响应时使用的模型</summary>
-    [DisplayName("模型")]
-    [Description("模型。生成缓存响应时使用的模型")]
+    private Int64 _ConversationId;
+    /// <summary>会话。关联的对话会话编号</summary>
+    [DisplayName("会话")]
+    [Description("会话。关联的对话会话编号")]
     [DataObjectField(false, false, false, 0)]
-    [BindColumn("ModelId", "模型。生成缓存响应时使用的模型", "")]
-    public Int32 ModelId { get => _ModelId; set { if (OnPropertyChanging("ModelId", value)) { _ModelId = value; OnPropertyChanged("ModelId"); } } }
+    [BindColumn("ConversationId", "会话。关联的对话会话编号", "")]
+    public Int64 ConversationId { get => _ConversationId; set { if (OnPropertyChanging("ConversationId", value)) { _ConversationId = value; OnPropertyChanged("ConversationId"); } } }
+
+    private Int64 _MessageId;
+    /// <summary>消息。关联的助手消息编号，0=尚未缓存</summary>
+    [DisplayName("消息")]
+    [Description("消息。关联的助手消息编号，0=尚未缓存")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("MessageId", "消息。关联的助手消息编号，0=尚未缓存", "")]
+    public Int64 MessageId { get => _MessageId; set { if (OnPropertyChanging("MessageId", value)) { _MessageId = value; OnPropertyChanged("MessageId"); } } }
 
     private String? _Icon;
     /// <summary>图标。Material Icon名称，如chat_bubble_outline</summary>
@@ -87,14 +78,6 @@ public partial class SuggestedQuestion
     [BindColumn("Color", "颜色。图标CSS颜色类，如text-blue-500", "")]
     public String? Color { get => _Color; set { if (OnPropertyChanging("Color", value)) { _Color = value; OnPropertyChanged("Color"); } } }
 
-    private Int32 _Sort;
-    /// <summary>排序。越大越靠前</summary>
-    [DisplayName("排序")]
-    [Description("排序。越大越靠前")]
-    [DataObjectField(false, false, false, 0)]
-    [BindColumn("Sort", "排序。越大越靠前", "")]
-    public Int32 Sort { get => _Sort; set { if (OnPropertyChanging("Sort", value)) { _Sort = value; OnPropertyChanged("Sort"); } } }
-
     private Boolean _Enable;
     /// <summary>启用</summary>
     [DisplayName("启用")]
@@ -102,6 +85,38 @@ public partial class SuggestedQuestion
     [DataObjectField(false, false, false, 0)]
     [BindColumn("Enable", "启用", "")]
     public Boolean Enable { get => _Enable; set { if (OnPropertyChanging("Enable", value)) { _Enable = value; OnPropertyChanged("Enable"); } } }
+
+    private Int32 _CacheDuration;
+    /// <summary>缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟</summary>
+    [DisplayName("缓存时长（分钟）")]
+    [Description("缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("CacheDuration", "缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟", "")]
+    public Int32 CacheDuration { get => _CacheDuration; set { if (OnPropertyChanging("CacheDuration", value)) { _CacheDuration = value; OnPropertyChanged("CacheDuration"); } } }
+
+    private Int32 _HitCount;
+    /// <summary>命中次数。累计被用户提问的总次数</summary>
+    [DisplayName("命中次数")]
+    [Description("命中次数。累计被用户提问的总次数")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("HitCount", "命中次数。累计被用户提问的总次数", "")]
+    public Int32 HitCount { get => _HitCount; set { if (OnPropertyChanging("HitCount", value)) { _HitCount = value; OnPropertyChanged("HitCount"); } } }
+
+    private Double _HeatScore;
+    /// <summary>热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序</summary>
+    [DisplayName("热度分数")]
+    [Description("热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序")]
+    [DataObjectField(false, false, false, 0)]
+    [BindColumn("HeatScore", "热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序", "")]
+    public Double HeatScore { get => _HeatScore; set { if (OnPropertyChanging("HeatScore", value)) { _HeatScore = value; OnPropertyChanged("HeatScore"); } } }
+
+    private DateTime _LastHitTime;
+    /// <summary>最近命中时间。最后一次被用户提问的时间戳</summary>
+    [DisplayName("最近命中时间")]
+    [Description("最近命中时间。最后一次被用户提问的时间戳")]
+    [DataObjectField(false, false, true, 0)]
+    [BindColumn("LastHitTime", "最近命中时间。最后一次被用户提问的时间戳", "")]
+    public DateTime LastHitTime { get => _LastHitTime; set { if (OnPropertyChanging("LastHitTime", value)) { _LastHitTime = value; OnPropertyChanged("LastHitTime"); } } }
 
     private Int32 _CreateUserID;
     /// <summary>创建用户</summary>
@@ -169,13 +184,15 @@ public partial class SuggestedQuestion
             "Id" => _Id,
             "Title" => _Title,
             "Question" => _Question,
-            "Response" => _Response,
-            "ThinkingResponse" => _ThinkingResponse,
-            "ModelId" => _ModelId,
+            "ConversationId" => _ConversationId,
+            "MessageId" => _MessageId,
             "Icon" => _Icon,
             "Color" => _Color,
-            "Sort" => _Sort,
             "Enable" => _Enable,
+            "CacheDuration" => _CacheDuration,
+            "HitCount" => _HitCount,
+            "HeatScore" => _HeatScore,
+            "LastHitTime" => _LastHitTime,
             "CreateUserID" => _CreateUserID,
             "CreateIP" => _CreateIP,
             "CreateTime" => _CreateTime,
@@ -191,13 +208,15 @@ public partial class SuggestedQuestion
                 case "Id": _Id = value.ToInt(); break;
                 case "Title": _Title = Convert.ToString(value); break;
                 case "Question": _Question = Convert.ToString(value); break;
-                case "Response": _Response = Convert.ToString(value); break;
-                case "ThinkingResponse": _ThinkingResponse = Convert.ToString(value); break;
-                case "ModelId": _ModelId = value.ToInt(); break;
+                case "ConversationId": _ConversationId = value.ToLong(); break;
+                case "MessageId": _MessageId = value.ToLong(); break;
                 case "Icon": _Icon = Convert.ToString(value); break;
                 case "Color": _Color = Convert.ToString(value); break;
-                case "Sort": _Sort = value.ToInt(); break;
                 case "Enable": _Enable = value.ToBoolean(); break;
+                case "CacheDuration": _CacheDuration = value.ToInt(); break;
+                case "HitCount": _HitCount = value.ToInt(); break;
+                case "HeatScore": _HeatScore = value.ToDouble(); break;
+                case "LastHitTime": _LastHitTime = value.ToDateTime(); break;
                 case "CreateUserID": _CreateUserID = value.ToInt(); break;
                 case "CreateIP": _CreateIP = Convert.ToString(value); break;
                 case "CreateTime": _CreateTime = value.ToDateTime(); break;
@@ -211,14 +230,6 @@ public partial class SuggestedQuestion
     #endregion
 
     #region 关联映射
-    /// <summary>模型</summary>
-    [XmlIgnore, IgnoreDataMember, ScriptIgnore]
-    public ModelConfig? Model => Extends.Get(nameof(Model), k => ModelConfig.FindById(ModelId));
-
-    /// <summary>模型</summary>
-    [Map(nameof(ModelId), typeof(ModelConfig), "Id")]
-    public String? ModelName => Model?.Name;
-
     #endregion
 
     #region 扩展查询
@@ -237,38 +248,21 @@ public partial class SuggestedQuestion
 
         //return Find(_.Id == id);
     }
-
-    /// <summary>根据排序查找</summary>
-    /// <param name="sort">排序</param>
-    /// <returns>实体列表</returns>
-    public static IList<SuggestedQuestion> FindAllBySort(Int32 sort)
-    {
-        if (sort < 0) return [];
-
-        // 实体缓存
-        if (Meta.Session.Count < MaxCacheCount) return Meta.Cache.FindAll(e => e.Sort == sort);
-
-        return FindAll(_.Sort == sort);
-    }
     #endregion
 
     #region 高级查询
     /// <summary>高级查询</summary>
-    /// <param name="sort">排序。越大越靠前</param>
     /// <param name="enable">启用</param>
-    /// <param name="modelId">模型。生成缓存响应时使用的模型</param>
     /// <param name="start">更新时间开始</param>
     /// <param name="end">更新时间结束</param>
     /// <param name="key">关键字</param>
     /// <param name="page">分页参数信息。可携带统计和数据权限扩展查询等信息</param>
     /// <returns>实体列表</returns>
-    public static IList<SuggestedQuestion> Search(Int32 sort, Boolean? enable, Int32 modelId, DateTime start, DateTime end, String key, PageParameter page)
+    public static IList<SuggestedQuestion> Search(Boolean? enable, DateTime start, DateTime end, String key, PageParameter page)
     {
         var exp = new WhereExpression();
 
-        if (sort >= 0) exp &= _.Sort == sort;
         if (enable != null) exp &= _.Enable == enable;
-        if (modelId >= 0) exp &= _.ModelId == modelId;
         exp &= _.UpdateTime.Between(start, end);
         if (!key.IsNullOrEmpty()) exp &= SearchWhereByKeys(key);
 
@@ -289,14 +283,11 @@ public partial class SuggestedQuestion
         /// <summary>问题。点击后发送给AI的完整提示词</summary>
         public static readonly Field Question = FindByName("Question");
 
-        /// <summary>响应。缓存的AI回复内容，Markdown格式</summary>
-        public static readonly Field Response = FindByName("Response");
+        /// <summary>会话。关联的对话会话编号</summary>
+        public static readonly Field ConversationId = FindByName("ConversationId");
 
-        /// <summary>推理响应。缓存的思考过程内容</summary>
-        public static readonly Field ThinkingResponse = FindByName("ThinkingResponse");
-
-        /// <summary>模型。生成缓存响应时使用的模型</summary>
-        public static readonly Field ModelId = FindByName("ModelId");
+        /// <summary>消息。关联的助手消息编号，0=尚未缓存</summary>
+        public static readonly Field MessageId = FindByName("MessageId");
 
         /// <summary>图标。Material Icon名称，如chat_bubble_outline</summary>
         public static readonly Field Icon = FindByName("Icon");
@@ -304,11 +295,20 @@ public partial class SuggestedQuestion
         /// <summary>颜色。图标CSS颜色类，如text-blue-500</summary>
         public static readonly Field Color = FindByName("Color");
 
-        /// <summary>排序。越大越靠前</summary>
-        public static readonly Field Sort = FindByName("Sort");
-
         /// <summary>启用</summary>
         public static readonly Field Enable = FindByName("Enable");
+
+        /// <summary>缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟</summary>
+        public static readonly Field CacheDuration = FindByName("CacheDuration");
+
+        /// <summary>命中次数。累计被用户提问的总次数</summary>
+        public static readonly Field HitCount = FindByName("HitCount");
+
+        /// <summary>热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序</summary>
+        public static readonly Field HeatScore = FindByName("HeatScore");
+
+        /// <summary>最近命中时间。最后一次被用户提问的时间戳</summary>
+        public static readonly Field LastHitTime = FindByName("LastHitTime");
 
         /// <summary>创建用户</summary>
         public static readonly Field CreateUserID = FindByName("CreateUserID");
@@ -343,14 +343,11 @@ public partial class SuggestedQuestion
         /// <summary>问题。点击后发送给AI的完整提示词</summary>
         public const String Question = "Question";
 
-        /// <summary>响应。缓存的AI回复内容，Markdown格式</summary>
-        public const String Response = "Response";
+        /// <summary>会话。关联的对话会话编号</summary>
+        public const String ConversationId = "ConversationId";
 
-        /// <summary>推理响应。缓存的思考过程内容</summary>
-        public const String ThinkingResponse = "ThinkingResponse";
-
-        /// <summary>模型。生成缓存响应时使用的模型</summary>
-        public const String ModelId = "ModelId";
+        /// <summary>消息。关联的助手消息编号，0=尚未缓存</summary>
+        public const String MessageId = "MessageId";
 
         /// <summary>图标。Material Icon名称，如chat_bubble_outline</summary>
         public const String Icon = "Icon";
@@ -358,11 +355,20 @@ public partial class SuggestedQuestion
         /// <summary>颜色。图标CSS颜色类，如text-blue-500</summary>
         public const String Color = "Color";
 
-        /// <summary>排序。越大越靠前</summary>
-        public const String Sort = "Sort";
-
         /// <summary>启用</summary>
         public const String Enable = "Enable";
+
+        /// <summary>缓存时长（分钟）。0=当天有效，-1=不缓存，正数=从更新时间起缓存N分钟</summary>
+        public const String CacheDuration = "CacheDuration";
+
+        /// <summary>命中次数。累计被用户提问的总次数</summary>
+        public const String HitCount = "HitCount";
+
+        /// <summary>热度分数。时间衰减得分，72小时半衰期EMA，用于欢迎页排序</summary>
+        public const String HeatScore = "HeatScore";
+
+        /// <summary>最近命中时间。最后一次被用户提问的时间戳</summary>
+        public const String LastHitTime = "LastHitTime";
 
         /// <summary>创建用户</summary>
         public const String CreateUserID = "CreateUserID";

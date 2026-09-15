@@ -33,6 +33,9 @@ public class BedrockRequest : IChatRequest
 
     /// <summary>工具配置</summary>
     public BedrockToolConfig? ToolConfig { get; set; }
+
+    /// <summary>模型专属附加请求字段。Converse 不原生支持的参数（如 Claude thinking）经此透传</summary>
+    public IDictionary<String, Object>? AdditionalModelRequestFields { get; set; }
     #endregion
 
     #region IChatRequest 适配
@@ -124,6 +127,10 @@ public class BedrockRequest : IChatRequest
     [IgnoreDataMember]
     public Double? FrequencyPenalty { get; set; }
 
+    /// <summary>随机种子。固定后模型对相同输入产生确定性输出，便于复现与测试</summary>
+    [IgnoreDataMember]
+    public Int32? Seed { get; set; }
+
     /// <summary>工具选择策略</summary>
     [IgnoreDataMember]
     public Object? ToolChoice { get; set; }
@@ -131,6 +138,10 @@ public class BedrockRequest : IChatRequest
     /// <summary>用户标识</summary>
     [IgnoreDataMember]
     public String? User { get; set; }
+
+    /// <summary>推理强度</summary>
+    [IgnoreDataMember]
+    public String? ReasoningEffort { get; set; }
 
     /// <summary>是否启用思考模式</summary>
     [IgnoreDataMember]
@@ -236,11 +247,45 @@ public class BedrockRequest : IChatRequest
                 }
                 else
                 {
-                    // 普通文本消息
-                    var textContent = msg.Content?.ToString();
-                    if (!String.IsNullOrEmpty(textContent))
+                    // 多模态图片输入：Converse API 通过 image 内容块接收 base64 图片
+                    if (msg.Contents is { Count: > 0 })
                     {
-                        bmsg.Content = [new BedrockContentBlock { Text = textContent }];
+                        var blocks = new List<BedrockContentBlock>();
+                        foreach (var item in msg.Contents)
+                        {
+                            if (item is TextContent text)
+                            {
+                                if (!String.IsNullOrEmpty(text.Text))
+                                    blocks.Add(new BedrockContentBlock { Text = text.Text });
+                            }
+                            else if (item is ImageContent img)
+                            {
+                                var data = img.Data;
+                                var bytes = data is { Length: > 0 } ? Convert.ToBase64String(data) : AIContentHelper.ParseDataUri(img.Uri);
+                                if (bytes != null)
+                                {
+                                    blocks.Add(new BedrockContentBlock
+                                    {
+                                        Image = new BedrockImage
+                                        {
+                                            Format = AIContentHelper.GetFormat(img.MediaType),
+                                            Source = new BedrockImageSource { Bytes = bytes },
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        if (blocks.Count > 0)
+                            bmsg.Content = blocks;
+                    }
+                    else
+                    {
+                        // 普通文本消息
+                        var textContent = msg.Content?.ToString();
+                        if (!String.IsNullOrEmpty(textContent))
+                        {
+                            bmsg.Content = [new BedrockContentBlock { Text = textContent }];
+                        }
                     }
                 }
 
@@ -260,11 +305,32 @@ public class BedrockRequest : IChatRequest
             inferenceConfig.Temperature = request.Temperature.Value;
         if (request.TopP != null)
             inferenceConfig.TopP = request.TopP.Value;
+        if (request.TopK != null)
+            inferenceConfig.TopK = request.TopK.Value;
+        if (request.PresencePenalty != null)
+            inferenceConfig.PresencePenalty = request.PresencePenalty.Value;
+        if (request.FrequencyPenalty != null)
+            inferenceConfig.FrequencyPenalty = request.FrequencyPenalty.Value;
         if (request.Stop != null && request.Stop.Count > 0)
             inferenceConfig.StopSequences = request.Stop;
 
         if (!inferenceConfig.IsEmpty())
             result.InferenceConfig = inferenceConfig;
+
+        // 思考模式：Claude on Bedrock 经 additionalModelRequestFields 透传 thinking（Anthropic 格式）
+        // Converse 不原生支持 thinking 参数，该字段由服务端透传给模型；对不支持思考的底座模型无副作用
+        if (request.EnableThinking != null)
+        {
+            var thinking = new Dictionary<String, Object> { ["type"] = request.EnableThinking.Value ? "enabled" : "disabled" };
+            if (request.EnableThinking.Value)
+            {
+                var budget = request["ThinkingBudget"] as Int32? ?? 1024;
+                thinking["budget_tokens"] = budget;
+                if (inferenceConfig.MaxTokens != null && inferenceConfig.MaxTokens.Value <= budget)
+                    inferenceConfig.MaxTokens = budget + 2048;
+            }
+            result.AdditionalModelRequestFields = new Dictionary<String, Object> { ["thinking"] = thinking };
+        }
 
         // 工具配置
         if (request.Tools != null && request.Tools.Count > 0)
@@ -293,7 +359,7 @@ public class BedrockRequest : IChatRequest
         return result;
     }
 
-    /// <summary>转换为内部统一的 ChatRequest</summary>
+    /// <summary>转换为内部统一的 ChatRequest。从类型化内容块恢复 text/toolUse/toolResult（与 FromChatRequest 对称）</summary>
     /// <returns>等效的 ChatRequest 实例</returns>
     public ChatRequest ToChatRequest()
     {
@@ -309,13 +375,48 @@ public class BedrockRequest : IChatRequest
 
         foreach (var msg in Messages)
         {
-            messages.Add(new ChatMessage
+            var cm = new ChatMessage { Role = msg.Role };
+
+            // 类型化内容块：text → Content，toolUse → ToolCalls，toolResult → ToolCallId + Content
+            if (msg.Content is { Count: > 0 })
             {
-                Role = msg.Role,
-                Content = msg.Content != null
-                    ? String.Join("", msg.Content.Select(c => c.Text ?? "").Where(t => !String.IsNullOrEmpty(t)))
-                    : null,
-            });
+                var textParts = new List<String>();
+                var toolCalls = new List<ToolCall>();
+                String? toolResultId = null;
+
+                foreach (var block in msg.Content)
+                {
+                    if (block?.Text != null) textParts.Add(block.Text);
+                    if (block?.ToolUse != null && !block.ToolUse.Name.IsNullOrEmpty())
+                    {
+                        toolCalls.Add(new ToolCall
+                        {
+                            Id = block.ToolUse.ToolUseId ?? "",
+                            Type = "function",
+                            Function = new FunctionCall
+                            {
+                                Name = block.ToolUse.Name,
+                                Arguments = block.ToolUse.Input != null ? block.ToolUse.Input.ToJson() : null,
+                            },
+                        });
+                    }
+                    if (block?.ToolResult != null)
+                    {
+                        toolResultId = block.ToolResult.ToolUseId;
+                        foreach (var sub in block.ToolResult.Content ?? [])
+                        {
+                            if (sub?.Text != null) textParts.Add(sub.Text);
+                        }
+                    }
+                }
+
+                if (toolResultId != null) cm.ToolCallId = toolResultId;
+                if (toolCalls.Count > 0) cm.ToolCalls = toolCalls;
+                var text = String.Join("", textParts);
+                if (!text.IsNullOrEmpty()) cm.Content = text;
+            }
+
+            messages.Add(cm);
         }
 
         return new ChatRequest
@@ -348,7 +449,7 @@ public class BedrockMessage
     public IList<BedrockContentBlock>? Content { get; set; }
 }
 
-/// <summary>Bedrock 内容块。通用容器，包含 text / toolUse / toolResult</summary>
+/// <summary>Bedrock 内容块。通用容器，包含 text / toolUse / toolResult / image</summary>
 public class BedrockContentBlock
 {
     /// <summary>文本内容</summary>
@@ -359,6 +460,26 @@ public class BedrockContentBlock
 
     /// <summary>工具结果内容</summary>
     public BedrockToolResult? ToolResult { get; set; }
+
+    /// <summary>图片内容</summary>
+    public BedrockImage? Image { get; set; }
+}
+
+/// <summary>Bedrock 图片内容块。对应 Converse API 的 {"image":{...}} 结构</summary>
+public class BedrockImage
+{
+    /// <summary>图片格式。png/jpeg/gif/webp</summary>
+    public String? Format { get; set; }
+
+    /// <summary>图片源</summary>
+    public BedrockImageSource? Source { get; set; }
+}
+
+/// <summary>Bedrock 图片源</summary>
+public class BedrockImageSource
+{
+    /// <summary>base64 编码的图片字节</summary>
+    public String? Bytes { get; set; }
 }
 
 /// <summary>Bedrock 工具调用</summary>
@@ -396,6 +517,15 @@ public class BedrockInferenceConfig
     /// <summary>核采样。0~1</summary>
     public Double? TopP { get; set; }
 
+    /// <summary>Top-K 采样</summary>
+    public Int32? TopK { get; set; }
+
+    /// <summary>存在惩罚。正值鼓励话题多样性</summary>
+    public Double? PresencePenalty { get; set; }
+
+    /// <summary>频率惩罚。正值抑制重复内容</summary>
+    public Double? FrequencyPenalty { get; set; }
+
     /// <summary>停止序列</summary>
     public IList<String>? StopSequences { get; set; }
 
@@ -404,6 +534,9 @@ public class BedrockInferenceConfig
         MaxTokens == null &&
         Temperature == null &&
         TopP == null &&
+        TopK == null &&
+        PresencePenalty == null &&
+        FrequencyPenalty == null &&
         (StopSequences == null || StopSequences.Count == 0);
 }
 

@@ -19,9 +19,10 @@ namespace NewLife.AI.Clients.Gemini;
 /// </remarks>
 /// <remarks>用连接选项初始化 Gemini 客户端</remarks>
 [AiClient("Gemini", "谷歌Gemini", "https://generativelanguage.googleapis.com", Protocol = "Gemini", Description = "谷歌 Gemini 系列多模态大模型，支持超长上下文")]
-[AiClientModel("gemini-2.5-pro", "Gemini 2.5 Pro", Thinking = true, Vision = true)]
-[AiClientModel("gemini-2.5-flash", "Gemini 2.5 Flash", Thinking = true, Vision = true)]
-[AiClientModel("imagen-4.0-generate-001", "Imagen 4", ImageGeneration = true, FunctionCalling = false)]
+[AiClientModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro", Thinking = true, Vision = true, InputPrice = 13.8, OutputPrice = 82.8, CachedInputPrice = 1.38)]
+[AiClientModel("gemini-3-flash-preview", "Gemini 3 Flash", Thinking = true, Vision = true, InputPrice = 3.45, OutputPrice = 20.7, CachedInputPrice = 0.345)]
+// 图像代表（历史 Gemini 2.5 由模型元数据表承载）
+[AiClientModel("imagen-4.0-generate-001", "Imagen 4", ImageGeneration = true, FunctionCalling = false, InputPrice = 0.276)]
 public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
 {
     #region 属性
@@ -29,7 +30,7 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
     public override String Name { get; set; } = "谷歌Gemini";
 
     /// <summary>默认Json序列化选项</summary>
-    public static JsonOptions DefaultJsonOptions = new()
+    public static readonly JsonOptions DefaultJsonOptions = new()
     {
         PropertyNaming = PropertyNaming.CamelCase,
         IgnoreNullValues = true,
@@ -66,12 +67,18 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (line == null) break;
 
-            if (!line.StartsWith("data: ")) continue;
+            // 兼容 data: 与 data: （部分服务商省略空格）
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var data = line.Substring(6).Trim();
+            var data = line.Substring(5).Trim();
             if (data.Length == 0) continue;
 
-            var chunk = ParseChunk(data, request, null);
+            // 流式错误识别（Gemini error 对象格式 {"error":{...}}），避免静默吞掉
+            EnsureNoStreamError(data, Name);
+
+            IChatResponse? chunk = null;
+            try { chunk = ParseChunk(data, request, null); }
+            catch (Exception ex) { LogParseChunkError(data, ex); }
             if (chunk != null)
                 yield return chunk;
         }
@@ -93,7 +100,8 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
         var apiKey = _options.ApiKey;
         var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
         var model = request.Model ?? _options.Model ?? "imagen-4.0-generate-001";
-        var url = $"{endpoint}/v1beta/models/{model}:predict?key={apiKey}";
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段（v1beta），避免双路径
+        var url = CombineApiUrl(endpoint, $"/v1beta/models/{model}:predict") + $"?key={apiKey}";
 
         var count = (request.N ?? 0) > 0 ? request.N!.Value : 1;
         var body = new
@@ -128,7 +136,8 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
     {
         var apiKey = _options.ApiKey;
         var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
-        var url = $"{endpoint}/v1beta/models?key={apiKey}";
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段（v1beta）
+        var url = CombineApiUrl(endpoint, "/v1beta/models") + $"?key={apiKey}";
 
         var json = await TryGetAsync(url, _options, cancellationToken).ConfigureAwait(false);
         if (json == null) return null;
@@ -167,11 +176,11 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
     /// <summary>构建请求地址。子类可重写此方法根据请求参数动态调整路径（如不同模型使用不同端点）</summary>
     protected override String BuildUrl(IChatRequest request)
     {
-        var endpoint = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/');
+        // A-73：CombineApiUrl 自动去重 endpoint 末尾版本段（v1/v1beta）
         if (request.Stream)
-            return $"{endpoint}/v1/models/{request.Model}:streamGenerateContent?alt=sse&key={_options.ApiKey}";
+            return CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), $"/v1/models/{request.Model}:streamGenerateContent") + $"?alt=sse&key={_options.ApiKey}";
         else
-            return $"{endpoint}/v1/models/{request.Model}:generateContent?key={_options.ApiKey}";
+            return CombineApiUrl(_options.GetEndpoint(DefaultEndpoint), $"/v1/models/{request.Model}:generateContent") + $"?key={_options.ApiKey}";
     }
 
     /// <summary>构建 Gemini 请求体</summary>
@@ -180,8 +189,11 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
     /// <summary>解析 Gemini 非流式响应</summary>
     protected override IChatResponse ParseResponse(String data, IChatRequest request)
     {
+        // 流式/非流式错误对象统一识别（Gemini 部分拦截场景以 HTTP 200 + {"error":{...}} 返回），避免静默吞掉
+        EnsureNoStreamError(data, Name);
+
         var resp = data.ToJsonEntity<GeminiResponse>(JsonOptions) ?? new GeminiResponse();
-        resp.Model = request.Model;
+        resp.Model ??= request.Model;
         if (resp is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion";
         return resp;
     }
@@ -190,7 +202,7 @@ public class GeminiChatClient : AiClientBase, IImageClient, IModelListClient
     protected override IChatResponse? ParseChunk(String data, IChatRequest request, String? lastEvent)
     {
         var resp = data.ToJsonEntity<GeminiResponse>(JsonOptions);
-        resp?.Model = request.Model;
+        if (resp != null) resp.Model ??= request.Model;
         if (resp is IChatResponse rs && rs.Object.IsNullOrEmpty()) rs.Object = "chat.completion.chunk";
         return resp;
     }

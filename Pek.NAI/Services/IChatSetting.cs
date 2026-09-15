@@ -19,7 +19,10 @@ public interface IChatSetting
     /// <summary>嵌入模型。向量检索/向量嵌入场景调用的模型编码（ModelConfig.Code）；为空时自动选择优先级最高的嵌入模型（SupportEmbedding=true），没有时退化为本地哈希嵌入</summary>
     String EmbedModel { get; }
 
-    /// <summary>上下文轮数。每次请求携带的历史对话轮数，默认10</summary>
+    /// <summary>重排序模型。CrossEncoder 二次精排场景调用的模型编码（ModelConfig.Code）；为空时跳过重排序步骤，直接使用 BM25+向量融合分</summary>
+    String RerankModel { get; }
+
+    /// <summary>上下文轮数。每次请求携带的历史对话轮数，默认20</summary>
     Int32 DefaultContextRounds { get; }
     #endregion
 
@@ -30,14 +33,16 @@ public interface IChatSetting
     /// <summary>工具结果最大字符数。工具返回结果超过此长度时自动截断并追加摘要提示，0表示不限制</summary>
     Int32 ToolResultMaxChars { get; }
 
-    /// <summary>推荐问题缓存。开启后命中当天缓存时直接返回，不请求大模型</summary>
-    Boolean EnableSuggestedQuestionCache { get; }
-
-    /// <summary>流式输出速度。缓存命中时的分块节流等级，1~5，默认3（约500字/秒）；超过5时直接一次性输出全部内容</summary>
-    Int32 StreamingSpeed { get; }
-
     /// <summary>技能内容最大字符数。技能提示词总长度超过此值时按优先级截断，默认8000</summary>
     Int32 SkillBudgetChars { get; }
+
+    /// <summary>SQL查询允许的非查询操作。逗号分隔，SELECT/WITH 始终允许不受此限制。默认 INSERT,UPDATE</summary>
+    String QuerySqlAllowedOperations { get; }
+    #endregion
+
+    #region 系统指令
+    /// <summary>全局系统指令。注入每一个用户的每一次对话，置于模型指令之后、优先级最低，仅作兜底行为准则</summary>
+    String SystemInstruction { get; }
     #endregion
 
     #region 功能开关
@@ -46,5 +51,15 @@ public interface IChatSetting
 
     /// <summary>启用函数调用</summary>
     Boolean EnableFunctionCalling { get; }
+
+    /// <summary>启用 MCP 工具调用</summary>
+    Boolean EnableMcp { get; }
+
+    /// <summary>后台继续生成。浏览器关闭后模型继续生成，切换会话后再切回可恢复</summary>
+    Boolean BackgroundGeneration { get; }
+
+    /// <summary>用户隔离。启用后向LLM服务商透传User字段，用于服务商侧KVCache隔离</summary>
+    Boolean EnableUserIsolation { get; }
+
     #endregion
 }

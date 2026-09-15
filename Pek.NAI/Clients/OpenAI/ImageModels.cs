@@ -21,7 +21,7 @@ public class ImageGenerationRequest
     /// <summary>生成图像数量。1~10，默认 1</summary>
     public Int32? N { get; set; }
 
-    /// <summary>图像尺寸。如 1024x1024、1024x1792、1792x1024</summary>
+    /// <summary>图像尺寸。如 1024*1024、1024x1792、1792x1024</summary>
     public String? Size { get; set; }
 
     /// <summary>图像质量。standard（默认）或 hd（高清，DALL·E 3 专有）</summary>
@@ -40,7 +40,7 @@ public class ImageGenerationRequest
 /// <summary>语音合成请求。兼容 OpenAI /v1/audio/speech 接口格式</summary>
 public class SpeechRequest
 {
-    /// <summary>TTS 模型编码。如 tts-1、cosyvoice-v2</summary>
+    /// <summary>TTS 模型编码。如 tts-1、cosyvoice-v3.5-flash</summary>
     public String Model { get; set; } = "tts-1";
 
     /// <summary>要合成的文本内容</summary>
@@ -54,6 +54,36 @@ public class SpeechRequest
 
     /// <summary>语速倍率。0.25~4.0，默认 1.0</summary>
     public Double? Speed { get; set; }
+
+    /// <summary>采样率。如 24000、16000、8000，默认 24000</summary>
+    public Int32? SampleRate { get; set; }
+
+    /// <summary>音量。0~100，默认 50</summary>
+    public Int32? Volume { get; set; }
+
+    /// <summary>音调倍率。0.5~2.0，默认 1.0</summary>
+    public Double? Pitch { get; set; }
+
+    /// <summary>关联消息编号。传入后优先从数据库加载消息文本，无需传 Input</summary>
+    public Int64? MessageId { get; set; }
+
+    /// <summary>本次合成消耗的字符数。由 SpeechAsync 回填，供上层用量追踪</summary>
+    public Int32 CharactersUsed { get; set; }
+
+    /// <summary>扩展属性字典。用于传递服务商特有参数，如 DashScope 的 language_type / instructions / mode</summary>
+    public IDictionary<String, Object?>? Items { get; set; }
+
+    /// <summary>按键获取或设置扩展属性</summary>
+    /// <param name="key">属性键名</param>
+    public Object? this[String key]
+    {
+        get => Items?.TryGetValue(key, out var v) == true ? v : null;
+        set
+        {
+            Items ??= new Dictionary<String, Object?>();
+            Items[key] = value;
+        }
+    }
 }
 
 /// <summary>图像编辑请求。对应 OpenAI /v1/images/edits（multipart/form-data）接口参数，以及 DashScope 原生多模态图像编辑接口参数</summary>
@@ -78,7 +108,7 @@ public class ImageEditsRequest
     /// <summary>模型名称，为 null 时使用默认</summary>
     public String? Model { get; set; }
 
-    /// <summary>输出尺寸，为 null 时使用服务端默认。如 1024x1024 或 1024*1024（两种分隔符均支持）</summary>
+    /// <summary>输出尺寸，为 null 时使用服务端默认。如 1024*1024 或 1024*1024（两种分隔符均支持）</summary>
     public String? Size { get; set; }
 
     /// <summary>生成图像数量。1~6，为 null 时使用服务端默认（通常为 1）。仅 DashScope 原生路径有效</summary>

@@ -1,4 +1,4 @@
-using System.Net.WebSockets;
+﻿using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using NewLife.Serialization;
@@ -57,13 +57,22 @@ public sealed class DashScopeRealtimeClient : IDisposable
         _cts = new CancellationTokenSource();
 
         var ws = new ClientWebSocket();
-        ws.Options.SetRequestHeader("Authorization", "Bearer " + _apiKey);
+        try
+        {
+            ws.Options.SetRequestHeader("Authorization", "Bearer " + _apiKey);
 
-        var uri = new Uri($"{RealtimeEndpoint}?model={Uri.EscapeDataString(model)}");
-        await ws.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
+            var uri = new Uri($"{RealtimeEndpoint}?model={Uri.EscapeDataString(model)}");
+            await ws.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
 
-        _ws = ws;
-        Model = model;
+            _ws = ws;
+            Model = model;
+        }
+        catch
+        {
+            // A-62：连接失败时释放 ws，避免泄漏
+            ws.Dispose();
+            throw;
+        }
     }
 
     /// <summary>断开 WebSocket 连接</summary>
@@ -147,17 +156,20 @@ public sealed class DashScopeRealtimeClient : IDisposable
     {
         EnsureConnected();
 
+        // A-61：链接内部 _cts.Token，使 Dispose 的取消能中断接收循环（原 _cts 是死状态）
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None, cancellationToken);
+
         var buffer = new Byte[16 * 1024];
         var sb = new StringBuilder();
 
         while (_ws!.State == WebSocketState.Open)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            linkedCts.Token.ThrowIfCancellationRequested();
 
             WebSocketReceiveResult result;
             try
             {
-                result = await _ws.ReceiveAsync(new ArraySegment<Byte>(buffer), cancellationToken).ConfigureAwait(false);
+                result = await _ws.ReceiveAsync(new ArraySegment<Byte>(buffer), linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -180,13 +192,62 @@ public sealed class DashScopeRealtimeClient : IDisposable
 
             if (String.IsNullOrWhiteSpace(json)) continue;
 
-            var evt = RealtimeEvent.Parse(json);
-            if (evt != null) yield return evt;
+            // A-71：单条 WS 消息可能包含多个 JSON 事件（服务端批量推送时拼接，如 session.created + response.created）。
+            // 直接整条 Parse 会因多顶层对象而失败并静默丢弃，按大括号配对切分后逐个解析，避免丢事件。
+            foreach (var part in SplitJsonObjects(json))
+            {
+                var evt = RealtimeEvent.Parse(part);
+                if (evt != null) yield return evt;
+            }
         }
     }
     #endregion
 
     #region 辅助
+    /// <summary>将可能包含多个 JSON 对象的文本按顶层大括号配对切分。忽略字符串值内的大括号与转义</summary>
+    /// <param name="json">原始文本</param>
+    /// <returns>切分后的 JSON 对象片段序列；无法配对的部分（尾部残缺）被丢弃</returns>
+    public static IEnumerable<String> SplitJsonObjects(String json)
+    {
+        var depth = 0;
+        var start = -1;
+        var inString = false;
+        var escaped = false;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (inString)
+            {
+                if (escaped)
+                    escaped = false;
+                else if (ch == '\\')
+                    escaped = true;
+                else if (ch == '"')
+                    inString = false;
+                continue;
+            }
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+            if (ch == '{')
+            {
+                if (depth == 0) start = i;
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    yield return json.Substring(start, i - start + 1);
+                    start = -1;
+                }
+            }
+        }
+    }
+
     private void EnsureConnected()
     {
         if (_ws == null || _ws.State != WebSocketState.Open)
@@ -275,19 +336,23 @@ public class RealtimeEvent
     /// <returns>解析后的事件对象；解析失败时返回 null</returns>
     public static RealtimeEvent? Parse(String json)
     {
+        // JsonParser.Decode 直接返回 IDictionary<String, Object?>，无需 as 二次转换
         IDictionary<String, Object?>? dic;
-        try { dic = JsonParser.Decode(json) as IDictionary<String, Object?>; }
+        try { dic = JsonParser.Decode(json); }
         catch { return null; }
 
         if (dic == null) return null;
 
         var evt = new RealtimeEvent
         {
+            // type / event_id 为每个事件必选键，直接索引访问
             Type = dic["type"] as String ?? "",
             EventId = dic["event_id"] as String,
             Raw = dic,
         };
 
+        // session / response / delta / item_index 为可选键，不同事件类型可能缺失，
+        // 用 TryGetValue 避免 KeyNotFoundException 中断接收循环
         if (dic["session"] is IDictionary<String, Object?> session)
             evt.SessionId = session["id"] as String;
 

@@ -6,6 +6,14 @@ import { Icon } from '@/components/common/Icon'
 import { MessageActions } from './MessageActions'
 import { TypingCursor } from './TypingCursor'
 import { ToolCallBadge } from './ToolCallBadge'
+import { WidgetBlock, parseWidgetData } from './WidgetBlock'
+import { ChartBlock, parseChartData } from './ChartBlock'
+import { TimelineBlock, parseTimelineData } from './TimelineBlock'
+import { MindmapBlock, parseMindmapData } from './MindmapBlock'
+import { KanbanBlock, parseKanbanData } from './KanbanBlock'
+import { SlideBlock, parseSlideData } from './SlideBlock'
+import { SpreadsheetBlock, parseSpreadsheetData } from './SpreadsheetBlock'
+import { DocBlock, parseDocData } from './DocBlock'
 
 import { fetchAttachmentInfos, type AttachmentInfo } from '@/lib/api'
 import type { ToolCall, TokenUsage } from '@/types'
@@ -39,6 +47,117 @@ interface MessageBubbleProps {
   usage?: TokenUsage
   model?: string
   className?: string
+}
+
+/** 工具调用中文显示名 */
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  show_timeline: '时间轴',
+  show_chart: '图表',
+  show_widget: '可视化',
+  show_china_map: '地图',
+  show_mindmap: '思维导图',
+  show_kanban: '看板',
+  build_ppt: '幻灯片',
+  build_excel: '电子表格',
+  build_doc: '文档',
+  ask_user: '提问',
+}
+
+/** 检测技术性内部错误（如 JSON 解析失败），不应直接暴露给用户 */
+function isInternalError(msg: string): boolean {
+  return /JSON 格式错误|LineNumber|BytePositionInLine|Expected either|is invalid after a value/i.test(msg)
+}
+
+/** 从 ToolCall 中提取结构化错误/去重信息（后端通过 ToolException / ToolError / 去重逻辑注入） */
+function getToolOutputInfo(tc: ToolCall): { type: 'error' | 'duplicate'; forUser: string } | null {
+  if (tc.status === 'error') {
+    // ToolException → tc.result 为纯文本，优先显示
+    if (tc.result && !tc.result.startsWith('{')) {
+      // 过滤技术性内部错误，不暴露给用户
+      if (isInternalError(tc.result)) return { type: 'error', forUser: '' }
+      return { type: 'error', forUser: tc.result }
+    }
+    // 通用异常 → tc.result 为 ToolError JSON，提取 for_user 或 hint
+    if (tc.result) {
+      try {
+        const parsed = JSON.parse(tc.result) as Record<string, unknown>
+        const msg = (parsed.for_user ?? parsed.hint ?? '') as string
+        if (msg) return { type: 'error', forUser: msg }
+      } catch { /* ignore */ }
+    }
+    return { type: 'error', forUser: '' }
+  }
+  // 去重调用（status='done' 但 result 为 {"kind":"duplicate","for_user":"..."}）
+  if (tc.result) {
+    try {
+      const parsed = JSON.parse(tc.result) as Record<string, unknown>
+      if (parsed.kind === 'duplicate') return { type: 'duplicate', forUser: (parsed.for_user as string) ?? '' }
+    } catch { /* ignore */ }
+  }
+  return null
+}
+
+/** 根据工具名称将结果分发到对应的可视化 Block 组件 */
+function renderToolResult(tc: ToolCall, showToolCalls: boolean, t: (key: string, options?: Record<string, unknown>) => string) {
+  if (tc.name === 'build_ppt') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingSlides')}</span></div>)
+    const sd = parseSlideData(tc.result)
+    if (sd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<SlideBlock data={sd} /></div>)
+  }
+  if (tc.name === 'build_excel') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingSpreadsheet')}</span></div>)
+    const xd = parseSpreadsheetData(tc.result)
+    if (xd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<SpreadsheetBlock data={xd} /></div>)
+  }
+  if (tc.name === 'build_doc') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingDocument')}</span></div>)
+    const dd = parseDocData(tc.result)
+    if (dd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<DocBlock data={dd} /></div>)
+  }
+  if (tc.name === 'show_widget' || tc.name === 'show_china_map') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingVisualization')}</span></div>)
+    const wd = parseWidgetData(tc.result)
+    if (wd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<WidgetBlock data={wd} /></div>)
+  }
+  if (tc.name === 'show_chart') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.renderingChart')}</span></div>)
+    const cd = parseChartData(tc.result)
+    if (cd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<ChartBlock spec={cd} /></div>)
+  }
+  if (tc.name === 'show_timeline') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingTimeline')}</span></div>)
+    const td = parseTimelineData(tc.result ?? '')
+    if (td) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<TimelineBlock key={td.timelineId} spec={td} /></div>)
+  }
+  if (tc.name === 'show_mindmap') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingMindmap')}</span></div>)
+    const md = parseMindmapData(tc.result ?? '')
+    if (md) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<MindmapBlock spec={md} /></div>)
+  }
+  if (tc.name === 'show_kanban') {
+    if (tc.status === 'calling') return (<div key={tc.id} className="flex items-center gap-2 px-3 py-2 text-sm text-gray-500 dark:text-gray-400 animate-pulse"><Icon name="hourglass_top" size="sm" /><span>{t('chat.generatingKanban')}</span></div>)
+    const kd = parseKanbanData(tc.result ?? '')
+    if (kd) return (<div key={tc.id} className="mt-4">{showToolCalls && <ToolCallBadge name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />}<KanbanBlock spec={kd} /></div>)
+  }
+  // 检查工具调用有无结构化错误/去重信息（来自后端 ToolException / 去重逻辑）
+  const outputInfo = getToolOutputInfo(tc)
+  if (outputInfo) {
+    if (outputInfo.type === 'error') {
+      return (
+        <div key={tc.id} className="rounded-lg border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-600 dark:text-red-400">
+          {outputInfo.forUser || `${TOOL_DISPLAY_NAMES[tc.name] ?? tc.name} ${t('chat.genFailed')}`}
+        </div>
+      )
+    }
+    if (outputInfo.type === 'duplicate') {
+      return (
+        <div key={tc.id} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 px-3 py-2 text-sm text-gray-400 dark:text-gray-500">
+          {outputInfo.forUser || `${TOOL_DISPLAY_NAMES[tc.name] ?? tc.name} ${t('chat.duplicateSkipped')}`}
+        </div>
+      )
+    }
+  }
+  return null
 }
 
 export function MessageBubble({
@@ -104,12 +223,12 @@ export function MessageBubble({
       <div className={cn('flex flex-col items-end mb-6 group', className)}>
         <div className="max-w-[75%] relative">
           {isEditing ? (
-            <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tr-sm px-4 py-3 shadow-sm">
+            <div className="bg-[var(--color-surface-2)] rounded-2xl rounded-tr-sm px-4 py-3 shadow-soft">
               <textarea
                 ref={editRef}
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
-                className="w-full bg-transparent text-gray-900 dark:text-gray-100 text-[15px] leading-7 resize-none outline-none min-h-[60px]"
+                className="w-full bg-transparent text-[var(--color-text-primary)] text-[15px] leading-7 resize-none outline-none min-h-[60px]"
                 rows={Math.max(2, editValue.split('\n').length)}
                 autoFocus
                 onKeyDown={(e) => {
@@ -123,14 +242,14 @@ export function MessageBubble({
               <div className="flex justify-end space-x-2 mt-2">
                 <button
                   onClick={onEditCancel}
-                  className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                  className="px-3 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] rounded-md hover:bg-[var(--color-surface-2)] transition-colors"
                 >
                   {t('common.cancel')}
                 </button>
                 {onEditSaveOnly && (
                   <button
                     onClick={() => editValue.trim() && onEditSaveOnly(editValue.trim())}
-                    className="px-3 py-1 text-xs text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors disabled:opacity-50"
+                    className="px-3 py-1 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-default)] hover:bg-[var(--color-surface-2)] rounded-md transition-colors disabled:opacity-50"
                     disabled={!editValue.trim()}
                   >
                     {t('common.save')}
@@ -147,7 +266,7 @@ export function MessageBubble({
             </div>
           ) : (
             <>
-              <div className="bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-2xl rounded-tr-sm px-5 py-3.5 leading-7 shadow-sm" style={{ fontSize: 'var(--chat-font-size, 16px)' }}>
+              <div className="bg-[var(--color-surface-2)] text-[var(--color-text-primary)] rounded-2xl rounded-tr-sm px-5 py-3.5 leading-7 shadow-soft" style={{ fontSize: 'var(--chat-font-size, 16px)' }}>
                 {content}
               </div>
               {attachInfos.length > 0 && (
@@ -157,7 +276,7 @@ export function MessageBubble({
                       <button
                         key={info.id}
                         onClick={() => setPreviewUrl(info.url)}
-                        className="w-20 h-20 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 hover:opacity-80 transition-opacity"
+                        className="w-20 h-20 rounded-lg overflow-hidden border border-[var(--color-border-default)] hover:opacity-80 transition-opacity"
                       >
                         <img src={info.url} alt={info.fileName} className="w-full h-full object-cover" />
                       </button>
@@ -242,7 +361,7 @@ export function MessageBubble({
       <div className="w-full">
         <div
           className={cn(
-            'leading-7',
+            'leading-7 px-4',
             isError
               ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl px-4 py-3 text-red-700 dark:text-red-400'
               : 'text-gray-900 dark:text-gray-100',
@@ -252,10 +371,15 @@ export function MessageBubble({
           {thinkingBlock}
 
           {toolCalls && toolCalls.length > 0 && (
-            <div className="flex items-center flex-wrap gap-2 mb-4">
-              {toolCalls.map((tc) => (
-                <ToolCallBadge key={tc.id} name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />
-              ))}
+            <div className="flex flex-col gap-3 mb-4">
+              {toolCalls.map((tc) => {
+                const resultBlock = renderToolResult(tc, showToolCalls, t)
+                if (resultBlock) return resultBlock
+                if (!showToolCalls) return null
+                return (
+                  <ToolCallBadge key={tc.id} name={tc.name} status={tc.status} arguments={tc.arguments} result={tc.result} showDetails={showToolCalls} />
+                )
+              })}
             </div>
           )}
 
@@ -270,7 +394,7 @@ export function MessageBubble({
           )}
         </div>
 
-        <div className="flex items-center mt-2">
+        <div className="flex flex-wrap items-center mt-2">
           <MessageActions
             onCopy={onCopy}
             onLike={onLike}
@@ -284,19 +408,19 @@ export function MessageBubble({
           />
           <div className="ml-auto flex items-center space-x-2 mr-1">
             {modelName && (
-              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default">
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default whitespace-nowrap">
                 {modelName}
               </span>
             )}
             {usage && usage.totalTokens != null && (
-              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default" title={`${t('chat.inputTokens')}: ${usage.inputTokens ?? 0} | ${t('chat.outputTokens')}: ${usage.outputTokens ?? 0}`}>
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default whitespace-nowrap" title={`${t('chat.inputTokens')}: ${usage.inputTokens ?? 0} | ${t('chat.outputTokens')}: ${usage.outputTokens ?? 0}`}>
                 {usage.inputTokens != null && usage.outputTokens != null
                   ? `${usage.inputTokens} + ${usage.outputTokens} = ${usage.totalTokens} tokens`
                   : `${usage.totalTokens} tokens`}
               </span>
             )}
             {createdAt && (
-              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default" title={formatExactTime(createdAt)}>
+              <span className="text-[11px] text-gray-400 dark:text-gray-500 cursor-default whitespace-nowrap" title={formatExactTime(createdAt)}>
                 {formatRelativeTime(createdAt, locale)}
               </span>
             )}

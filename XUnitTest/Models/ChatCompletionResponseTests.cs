@@ -60,6 +60,73 @@ public class ChatCompletionResponseTests
     }
 
     [Fact]
+    [DisplayName("JSON 反序列化—completion_tokens_details.reasoning_tokens 映射")]
+    public void JsonDeserialize_Usage_ReasoningTokensMapped()
+    {
+        var json = """
+        {
+            "choices": [{ "message": { "role": "assistant", "content": "ok" } }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "completion_tokens_details": { "reasoning_tokens": 8 }
+            }
+        }
+        """;
+
+        var result = json.ToJsonEntity<ChatCompletionResponse>(OpenAIChatClient.DefaultJsonOptions)!;
+
+        // Wire DTO 解析
+        Assert.Equal(8, result.Usage!.CompletionTokensDetails!.ReasoningTokens);
+
+        // 统一 UsageDetails 映射（UsageService 计费消费路径）
+        var unified = result.ToChatResponse().Usage!;
+        Assert.Equal(8, unified.ReasoningTokens);
+        Assert.Equal(10, unified.InputTokens);
+        Assert.Equal(20, unified.OutputTokens);
+    }
+
+    [Fact]
+    [DisplayName("Text—多模态数组内容提取 text 片段")]
+    public void Text_MultimodalArray_ExtractsText()
+    {
+        var resp = new ChatCompletionResponse
+        {
+            Choices =
+            [
+                new CompletionChoice
+                {
+                    Message = new ChatMessage
+                    {
+                        Role = "assistant",
+                        Content = new List<Object>
+                        {
+                            new Dictionary<String, Object> { ["type"] = "text", ["text"] = "你好，" },
+                            new Dictionary<String, Object> { ["type"] = "image_url", ["image_url"] = new Dictionary<String, Object> { ["url"] = "https://x/1.png" } },
+                            new Dictionary<String, Object> { ["type"] = "text", ["text"] = "世界" },
+                        },
+                    }
+                }
+            ]
+        };
+
+        Assert.Equal("你好，世界", resp.Text);
+    }
+
+    [Fact]
+    [DisplayName("Text—空内容数组返回空字符串而非 NRE（A-52）")]
+    public void Text_EmptyContentArray_ReturnsEmptyString()
+    {
+        // A-52：部分服务商在 tool_calls/content_filter 结束或思考-only 回合返回空 content 数组，
+        // ChatResponse.Text 此前 list.FirstOrDefault() 返回 null 后落到 value.ToString() 抛 NRE
+        var resp = new ChatResponse();
+        resp.Add(new List<Object>());
+
+        Assert.Equal(String.Empty, resp.Text);
+    }
+
+    [Fact]
     [DisplayName("JSON 反序列化—含工具调用")]
     public void JsonDeserialize_WithToolCalls()
     {

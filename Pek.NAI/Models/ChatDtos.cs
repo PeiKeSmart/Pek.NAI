@@ -1,4 +1,4 @@
-namespace NewLife.AI.Models;
+﻿namespace NewLife.AI.Models;
 
 /// <summary>发送消息请求。前端发起对话/编辑/重生的统一入参</summary>
 /// <param name="Content">用户消息文本（多模态场景为 JSON 编码的内容数组）</param>
@@ -6,6 +6,9 @@ namespace NewLife.AI.Models;
 /// <param name="AttachmentIds">附件编号列表（前端上传后返回的 Id 字符串）</param>
 public record SendMessageRequest(String Content, ThinkingMode ThinkingMode, IReadOnlyList<String>? AttachmentIds)
 {
+    /// <summary>推理强度。由模型 ReasoningEfforts 字段定义可选值，如 high/max</summary>
+    public String? ReasoningEffort { get; init; }
+
     /// <summary>技能编码。激活对应技能的系统提示词</summary>
     public String? SkillCode { get; init; }
 
@@ -20,6 +23,27 @@ public record SendMessageRequest(String Content, ThinkingMode ThinkingMode, IRea
     /// EnableCodeInterpreter(bool) / VlHighResolutionImages(bool) / MaxPixels(int)
     /// </summary>
     public IDictionary<String, Object?>? Options { get; init; }
+
+    /// <summary>语音合成模型编码。非空时表示 TTS 模式：服务端将文字转为音频并作为助手消息返回，不调用 AI 推理</summary>
+    public String? TtsModel { get; init; }
+
+    /// <summary>语音合成音色。TTS 模式专用</summary>
+    public String? TtsVoice { get; init; }
+
+    /// <summary>语音合成格式。mp3/wav/pcm，TTS 模式专用</summary>
+    public String? TtsFormat { get; init; }
+
+    /// <summary>语速倍率。0.5~2.0，TTS 模式专用</summary>
+    public Double? TtsSpeed { get; init; }
+
+    /// <summary>采样率。24000/16000/8000，TTS 模式专用</summary>
+    public Int32? TtsSampleRate { get; init; }
+
+    /// <summary>音量。0~100，默认 50，TTS 模式专用</summary>
+    public Int32? TtsVolume { get; init; }
+
+    /// <summary>音调。0.5~2.0，默认 1.0，TTS 模式专用</summary>
+    public Double? TtsPitch { get; init; }
 }
 
 /// <summary>消息数据。向前端返回的消息 DTO，包含内容、思考、工具调用、用量统计与反馈</summary>
@@ -53,4 +77,13 @@ public record MessageDto(Int64 Id, Int64 ConversationId, String Role, String Con
 
     /// <summary>反馈原因。点踩时的具体原因</summary>
     public String? FeedbackReason { get; set; }
+
+    /// <summary>模型编码。实际使用的模型编码，如 gpt-4o</summary>
+    public String? ModelName { get; set; }
+
+    /// <summary>本次对话费用（元）</summary>
+    public Decimal TotalCost { get; set; }
+
+    /// <summary>知识引用列表。knowledge_refs 事件同款 JSON 数组 [{"id":1,"title":"xxx"}]，历史消息加载时由后端根据 ArticleIds 解析填充</summary>
+    public String? KnowledgeRefs { get; set; }
 }

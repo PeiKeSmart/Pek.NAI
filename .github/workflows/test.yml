@@ -16,12 +16,12 @@ jobs:
 
     - uses: pnpm/action-setup@v4
       with:
-        version: latest
+        version: 10.17.1
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 20
+        node-version: 22
         cache: pnpm
         cache-dependency-path: Web/pnpm-lock.yaml
 
@@ -46,7 +46,7 @@ jobs:
         fi
 
     - name: Build backend
-      run: dotnet build -c Release Pek.NAI.slnx
+      run: dotnet build -c Release NewLife.AI.sln
 
     - name: Test backend
-      run: dotnet test -c Release --no-build Pek.NAI.slnx
+      run: dotnet test -c Release --no-build NewLife.AI.sln

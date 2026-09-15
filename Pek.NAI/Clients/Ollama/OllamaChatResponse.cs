@@ -1,5 +1,6 @@
 ﻿using System.Runtime.Serialization;
 using NewLife.AI.Models;
+using NewLife.Serialization;
 
 namespace NewLife.AI.Clients.Ollama;
 
@@ -85,6 +86,10 @@ public class OllamaChatResponse : IChatResponse
                 var msg = Message.ToChatMessage();
                 var fr = FinishReasonHelper.Parse(DoneReason);
                 if (fr == null && Done) fr = FinishReason.Stop;
+                // Ollama 原生 API 在返回工具调用时 done_reason 始终为 "stop"，
+                // 需手动映射为 "tool_calls" 以便 ToolChatClient 流式路径正确识别
+                if (fr == FinishReason.Stop && Message.ToolCalls is { Count: > 0 })
+                    fr = FinishReason.ToolCalls;
                 _messages = [new ChatChoice { Index = 0, Message = msg, Delta = msg, FinishReason = fr }];
             }
             return _messages;
@@ -135,7 +140,11 @@ public class OllamaChatResponse : IChatResponse
         if (Message != null)
         {
             var msg = Message.ToChatMessage();
-            response.Messages = [new ChatChoice { Index = 0, Message = msg, FinishReason = FinishReasonHelper.Parse(DoneReason) }];
+            // 与 IChatResponse.Messages getter 保持一致：done 缺省 Stop，tool_calls 映射为 ToolCalls
+            var fr = FinishReasonHelper.Parse(DoneReason);
+            if (fr == null && Done) fr = FinishReason.Stop;
+            if (fr == FinishReason.Stop && Message.ToolCalls is { Count: > 0 }) fr = FinishReason.ToolCalls;
+            response.Messages = [new ChatChoice { Index = 0, Message = msg, FinishReason = fr }];
         }
 
         if (PromptEvalCount > 0 || EvalCount > 0)
@@ -151,6 +160,70 @@ public class OllamaChatResponse : IChatResponse
         return response;
     }
 
+    /// <summary>从内部统一 ChatResponse 构建 Ollama 协议响应（非流式）。供网关等对外伪装 Ollama 协议的场景使用</summary>
+    /// <param name="response">内部统一响应</param>
+    /// <returns>Ollama 协议响应对象</returns>
+    public static OllamaChatResponse From(ChatResponse response)
+    {
+        var result = new OllamaChatResponse
+        {
+            Model = response.Model,
+            CreatedAt = FormatTime(response.Created),
+            Done = true,
+        };
+
+        // 完成原因映射：工具调用输出 tool_calls，其余为 stop
+        var fr = response.Messages?.FirstOrDefault()?.FinishReason;
+        if (fr == FinishReason.ToolCalls)
+            result.DoneReason = "tool_calls";
+        else
+            result.DoneReason = "stop";
+
+        var msg = response.Messages?.FirstOrDefault()?.Message;
+        if (msg != null)
+        {
+            var m = new OllamaChatMessage { Role = "assistant" };
+            if (msg.Content != null) m.Content = msg.Content;
+            if (!msg.ReasoningContent.IsNullOrEmpty()) m.Thinking = msg.ReasoningContent;
+            if (msg.ToolCalls is { Count: > 0 })
+            {
+                var toolCalls = new List<OllamaToolCall>(msg.ToolCalls.Count);
+                foreach (var tc in msg.ToolCalls)
+                {
+                    var otc = new OllamaToolCall { Id = tc.Id, Type = tc.Type };
+                    if (tc.Function != null)
+                    {
+                        // arguments JSON 字符串解析为对象，Ollama 协议要求 arguments 为对象
+                        Object? args;
+                        var argsStr = tc.Function.Arguments;
+                        if (!argsStr.IsNullOrEmpty())
+                            args = JsonParser.Decode(argsStr) ?? (Object)argsStr;
+                        else
+                            args = new Dictionary<String, Object?>();
+
+                        otc.Function = new OllamaFunctionCall { Name = tc.Function.Name, Arguments = args };
+                    }
+                    toolCalls.Add(otc);
+                }
+                m.ToolCalls = toolCalls;
+            }
+            result.Message = m;
+        }
+
+        if (response.Usage != null)
+        {
+            result.PromptEvalCount = response.Usage.InputTokens;
+            result.EvalCount = response.Usage.OutputTokens;
+        }
+
+        return result;
+    }
+
+    /// <summary>格式化 Ollama 时间戳。RFC3339 UTC 格式（如 2026-08-05T10:00:00.123Z），与 Ollama 官方响应一致</summary>
+    /// <param name="time">时间</param>
+    /// <returns>Ollama 格式时间字符串</returns>
+    private static String FormatTime(DateTimeOffset time) => time.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+
     /// <summary>转换为通用 ChatResponse（流式 chunk）</summary>
     /// <returns>流式 chunk 响应，解析失败返回 null</returns>
     public ChatResponse? ToStreamChunk()
@@ -164,6 +237,9 @@ public class OllamaChatResponse : IChatResponse
 
         FinishReason? finishReason = null;
         if (Done) finishReason = FinishReasonHelper.Parse(DoneReason) ?? FinishReason.Stop;
+        // 与 IChatResponse.Messages getter 保持一致：tool_calls 映射为 ToolCalls（Ollama done_reason 始终为 stop）
+        if (finishReason == FinishReason.Stop && Message?.ToolCalls is { Count: > 0 })
+            finishReason = FinishReason.ToolCalls;
 
         if (Message != null)
         {

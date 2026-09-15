@@ -110,6 +110,18 @@ public class ChatOptions : IExtend
     /// </remarks>
     public Double? FrequencyPenalty { get; set; }
 
+    /// <summary>随机种子。固定后模型对相同输入产生确定性输出，便于复现与测试</summary>
+    /// <remarks>
+    /// 设置后服务商在同一模型/参数下对相同提示词输出结果可复现：
+    /// <list type="bullet">
+    ///   <item><description>适合单元测试、回归验证、AB 对比等需要确定性输出的场景</description></item>
+    ///   <item><description>null：不发送此参数，模型使用随机采样</description></item>
+    ///   <item><description>并非所有服务商都支持 Seed（OpenAI/DashScope/Gemini/Ollama 支持），不支持的会忽略此参数</description></item>
+    /// </list>
+    /// 注意：即使设置了 Seed，采样仍有理论上的随机性，服务商不保证绝对可复现。
+    /// </remarks>
+    public Int32? Seed { get; set; }
+
     /// <summary>可用工具列表。用于函数调用</summary>
     /// <remarks>
     /// 定义模型可以调用的外部工具（即 Function Calling）：
@@ -146,6 +158,18 @@ public class ChatOptions : IExtend
     /// UserId 仅在 SDK 内部中间件管道中流转，不发送给服务商。
     /// </remarks>
     public String? User { get; set; }
+
+    /// <summary>推理强度。支持值由模型决定，如 high/max（DeepSeek），low/medium/high（OpenAI o3/o4）</summary>
+    /// <remarks>
+    /// 控制模型在思考模式下投入的推理计算量：
+    /// <list type="bullet">
+    ///   <item><description>DeepSeek：high（默认）、max（复杂任务）</description></item>
+    ///   <item><description>OpenAI：none、minimal、low、medium、high、xhigh（model-dependent）</description></item>
+    /// </list>
+    /// null=沿用模型默认行为，不发送此参数。
+    /// 仅在 <see cref="EnableThinking"/> 为 true 时有效，不支持推理强度的模型会忽略此参数。
+    /// </remarks>
+    public String? ReasoningEffort { get; set; }
 
     /// <summary>是否启用思考模式。null=不设置，true=开启，false=关闭</summary>
     /// <remarks>
@@ -212,6 +236,10 @@ public class ChatOptions : IExtend
     /// <summary>扩展数据。用于在中间件管道中传递非结构化的自定义上下文</summary>
     public IDictionary<String, Object?> Items { get; set; } = new Dictionary<String, Object?>();
 
-    /// <summary>索引器，方便访问扩展数据</summary>
-    public Object? this[String key] { get => Items.TryGetValue(key, out var value) ? value : null; set => Items[key] = value; }
+    /// <summary>索引器，方便访问扩展数据。Items 被置 null 时 get 返回 null、set 自动创建，防空异常</summary>
+    public Object? this[String key]
+    {
+        get => Items != null && Items.TryGetValue(key, out var value) ? value : null;
+        set => (Items ??= new Dictionary<String, Object?>())[key] = value;
+    }
 }

@@ -18,7 +18,7 @@ public class SkillService(IChatSetting chatSetting, ILog log)
     /// <param name="userId">用户编号</param>
     /// <param name="maxCount">最大返回数量</param>
     /// <returns></returns>
-    public IList<Skill> GetSkillBarList(Int32 userId, Int32 maxCount = 8)
+    public IList<Skill> GetSkillBarList(Int32 userId, Int32 projectId = 0, Int32 maxCount = 8)
     {
         var result = new List<Skill>();
         var addedIds = new HashSet<Int32>();
@@ -35,7 +35,7 @@ public class SkillService(IChatSetting chatSetting, ILog log)
 
         if (result.Count < maxCount)
         {
-            var normalSkills = GetAllSkills().OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
+            var normalSkills = GetVisibleSkills(userId, projectId).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
             foreach (var skill in normalSkills)
             {
                 if (result.Count >= maxCount) break;
@@ -47,10 +47,21 @@ public class SkillService(IChatSetting chatSetting, ILog log)
         return result;
     }
 
+    /// <summary>获取当前用户可见的启用技能列表。规则：全局(UserId=0) + 自己的(UserId=本人) + 项目专属(ProjectId=当前项目)</summary>
+    /// <param name="userId">用户编号</param>
+    /// <param name="projectId">项目编号，0=不限制项目</param>
+    /// <param name="category">分类筛选（可选）</param>
+    /// <returns></returns>
+    public IList<Skill> GetVisibleSkills(Int32 userId, Int32 projectId = 0, String? category = null)
+    {
+        var all = GetAllSkills(category);
+        return all.Where(e => e.UserId == 0 || e.UserId == userId || (projectId > 0 && e.ProjectId == projectId)).ToList();
+    }
+
     /// <summary>获取全部启用的技能列表</summary>
     /// <param name="category">分类筛选（可选）</param>
     /// <returns></returns>
-    public IList<Skill> GetAllSkills(String? category = null)
+    public virtual IList<Skill> GetAllSkills(String? category = null)
     {
         if (!String.IsNullOrEmpty(category))
             return Skill.FindAllByCategory(category).Where(e => e.Enable).OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id).ToList();
@@ -63,9 +74,9 @@ public class SkillService(IChatSetting chatSetting, ILog log)
     /// <param name="keyword">搜索关键词（可选），按Code/Name模糊匹配</param>
     /// <param name="maxCount">最大返回数量，默认20</param>
     /// <returns></returns>
-    public IList<Skill> GetMentionSkills(Int32 userId, String? keyword = null, Int32 maxCount = 20)
+    public IList<Skill> GetMentionSkills(Int32 userId, Int32 projectId = 0, String? keyword = null, Int32 maxCount = 20)
     {
-        var allSkills = GetAllSkills();
+        var allSkills = GetVisibleSkills(userId, projectId);
 
         if (!String.IsNullOrEmpty(keyword))
             allSkills = allSkills.Where(e => (e.Code?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false) || (e.Name?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
@@ -311,16 +322,22 @@ public class SkillService(IChatSetting chatSetting, ILog log)
         return p.GetList<Int32>();
     }
 
-    /// <summary>根据用户消息内容匹配触发词技能。遍历所有启用且设置了触发词的技能，消息包含任一触发词时返回该技能（按Sort降序优先）</summary>
+    /// <summary>根据用户消息内容匹配所有命中的技能。遍历启用技能，消息包含任一触发词时加入结果列表（按Sort降序）</summary>
     /// <param name="content">用户消息内容</param>
-    /// <returns>匹配到的技能，无匹配返回 null</returns>
-    public Skill? MatchSkillByContent(String? content)
+    /// <param name="primaryOnly">仅匹配主技能（IsPrimary=true）</param>
+    /// <param name="projectId">项目编号。大于 0 时仅匹配全局技能（ProjectId=0）与该项目的专属技能，用于网关/渠道项目接入</param>
+    /// <returns>匹配到的技能列表，无匹配返回空列表</returns>
+    public IList<Skill> MatchSkillsByContent(String? content, Boolean primaryOnly = false, Int32 projectId = 0)
     {
-        if (content.IsNullOrWhiteSpace()) return null;
+        var result = new List<Skill>();
+        if (content.IsNullOrWhiteSpace()) return result;
 
         var allSkills = GetAllEnabledSkillsForTriggerMatch();
-        foreach (var skill in allSkills.OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id))
+        if (projectId > 0)
+            allSkills = allSkills.Where(e => e.ProjectId == 0 || e.ProjectId == projectId).ToList();
+        foreach (var skill in allSkills)
         {
+            if (primaryOnly && !skill.IsPrimary) continue;
             if (skill.Triggers.IsNullOrWhiteSpace()) continue;
 
             var triggers = skill.Triggers.Split(',', '，');
@@ -328,11 +345,36 @@ public class SkillService(IChatSetting chatSetting, ILog log)
             {
                 var word = trigger.Trim();
                 if (!word.IsNullOrEmpty() && content.Contains(word, StringComparison.OrdinalIgnoreCase))
-                    return skill;
+                {
+                    result.Add(skill);
+                    break;
+                }
             }
         }
 
-        return null;
+        result.Sort((a, b) =>
+        {
+            var sortCompare = b.Sort.CompareTo(a.Sort);
+            return sortCompare != 0 ? sortCompare : b.Id.CompareTo(a.Id);
+        });
+
+        return result;
+    }
+
+    /// <summary>根据用户消息内容匹配触发词技能。遍历所有启用且设置了触发词的技能，消息包含任一触发词时返回该技能（按Sort降序优先）</summary>
+    /// <param name="content">用户消息内容</param>
+    /// <returns>匹配到的技能，无匹配返回 null</returns>
+    public Skill? MatchSkillByContent(String? content) => MatchSkillsByContent(content).FirstOrDefault();
+
+    /// <summary>获取所有启用的主技能列表（IsPrimary=true），按Sort降序</summary>
+    /// <returns></returns>
+    public IList<Skill> GetPrimarySkills()
+    {
+        return GetAllSkills()
+            .Where(e => e.IsPrimary)
+            .OrderByDescending(e => e.Sort)
+            .ThenByDescending(e => e.Id)
+            .ToList();
     }
 
     /// <summary>根据消息内容匹配原生工具触发词。仅返回启用且 IsSystem=false 的工具名称集合</summary>
@@ -349,6 +391,34 @@ public class SkillService(IChatSetting chatSetting, ILog log)
             if (tool.Name.IsNullOrWhiteSpace() || tool.IsSystem || tool.Triggers.IsNullOrWhiteSpace()) continue;
 
             var triggers = tool.Triggers.Split(',', '，');
+            foreach (var trigger in triggers)
+            {
+                var word = trigger.Trim();
+                if (!word.IsNullOrEmpty() && content.Contains(word, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(tool.Name);
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>根据助手回复内容匹配助手触发词工具。仅返回启用且 IsSystem=false 且设置了 AssistantTriggers 的工具名称集合</summary>
+    /// <param name="content">AI 上一轮回复内容</param>
+    /// <returns>命中的工具名称集合</returns>
+    public ISet<String> MatchNativeToolNamesByAssistantContent(String? content)
+    {
+        var result = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
+        if (content.IsNullOrWhiteSpace()) return result;
+
+        var tools = GetNativeToolsForTriggerMatch();
+        foreach (var tool in tools.OrderByDescending(e => e.Sort).ThenByDescending(e => e.Id))
+        {
+            if (tool.Name.IsNullOrWhiteSpace() || tool.IsSystem || tool.AssistantTriggers.IsNullOrWhiteSpace()) continue;
+
+            var triggers = tool.AssistantTriggers.Split(',', '，');
             foreach (var trigger in triggers)
             {
                 var word = trigger.Trim();

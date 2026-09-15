@@ -40,10 +40,10 @@ public class OllamaChatClient : AiClientBase, IModelListClient
     public const String DefaultEmbedModel = "nomic-embed-text";
 
     /// <summary>默认Json序列化选项</summary>
-    public static JsonOptions DefaultJsonOptions = new()
+    public static readonly JsonOptions DefaultJsonOptions = new()
     {
         PropertyNaming = PropertyNaming.SnakeCaseLower,
-        IgnoreNullValues = false,
+        IgnoreNullValues = true,
     };
     #endregion
 
@@ -80,6 +80,14 @@ public class OllamaChatClient : AiClientBase, IModelListClient
 
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
             if (String.IsNullOrEmpty(line)) continue;
+
+            // 流式错误：Ollama NDJSON 错误为 {"error":"..."}
+            if (line.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+            {
+                var errDic = JsonParser.Decode(line);
+                var message = errDic?["error"] as String ?? line;
+                throw new HttpRequestException($"[{Name}] 流式错误 {message}");
+            }
 
             var chunk = ParseChunk(line, request, null);
             if (chunk != null)
@@ -195,11 +203,21 @@ public class OllamaChatClient : AiClientBase, IModelListClient
 
         var url = _options.GetEndpoint(DefaultEndpoint).TrimEnd('/') + "/api/pull";
 
-        // 拉取模型可能耗时数分钟，使用 30 分钟超时
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromMinutes(30));
-        var json = await PostAsync(url, new { model, stream = false }, null, _options, cts.Token).ConfigureAwait(false);
-        return json.ToJsonEntity<OllamaPullStatus>(JsonOptions);
+        // 拉取模型可能耗时数分钟，共享 HttpClient.Timeout（默认 300s）会先触发导致中断，
+        // 这里临时放大超时（30 分钟）执行，finally 恢复（A-73）。拉取为低频操作，并发窗口可忽略
+        var oldTimeout = HttpClient.Timeout;
+        HttpClient.Timeout = TimeSpan.FromMinutes(30);
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromMinutes(30));
+            var json = await PostAsync(url, new { model, stream = false }, null, _options, cts.Token).ConfigureAwait(false);
+            return json.ToJsonEntity<OllamaPullStatus>(JsonOptions);
+        }
+        finally
+        {
+            HttpClient.Timeout = oldTimeout;
+        }
     }
     #endregion
 
@@ -255,8 +273,8 @@ public class OllamaChatClient : AiClientBase, IModelListClient
     /// <returns>推断出的能力信息</returns>
     public AiProviderCapabilities InferModelCapabilities(String? modelId, OllamaModelDetails? details)
     {
-        if (String.IsNullOrEmpty(modelId))
-            return new AiProviderCapabilities(false, false, false, false);
+        if (modelId.IsNullOrEmpty())
+            return new AiProviderCapabilities();
 
         var thinking = false;
         var vision = false;
@@ -298,7 +316,7 @@ public class OllamaChatClient : AiClientBase, IModelListClient
         }
 
         // Ollama 本地模型无法通过名称准确推断上下文长度，由 /api/show 接口补充
-        return new AiProviderCapabilities(thinking, funcCall, vision, false, false, false, false, 0);
+        return new AiProviderCapabilities(SupportThinking: thinking, SupportFunction: funcCall, SupportVision: vision);
     }
     #endregion
 }

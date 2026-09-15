@@ -6,9 +6,11 @@ using System.Text.Json.Serialization;
 using NewLife.AI.Clients;
 using NewLife.AI.Clients.Anthropic;
 using NewLife.AI.Clients.Gemini;
+using NewLife.AI.Clients.Ollama;
 using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Filters;
 using NewLife.Collections;
+using NewLife.Cube.Entity;
 using NewLife.Serialization;
 using ILog = NewLife.Log.ILog;
 
@@ -25,6 +27,12 @@ public enum GatewayProtocol
 
     /// <summary>Google Gemini API 协议</summary>
     Gemini,
+
+    /// <summary>Ollama /api/chat 原生协议（NDJSON 流式，message 字段风格）</summary>
+    Ollama,
+
+    /// <summary>Ollama /api/generate 原生协议（NDJSON 流式，response 字段风格）</summary>
+    OllamaGenerate,
 }
 
 /// <summary>API 网关服务。按 model 字段路由到对应的模型提供商，支持认证校验和限流重试</summary>
@@ -34,7 +42,7 @@ public enum GatewayProtocol
 /// <param name="chatFilters">对话过滤器链（日志、监控等横切关注点；ConversationId=0 时过滤器应 graceful no-op）</param>
 /// <param name="chatSetting">对话配置</param>
 /// <param name="log">日志</param>
-public class GatewayService(UsageService usageService, ModelService modelService, IEnumerable<IChatFilter>? chatFilters, ChatSetting chatSetting, ILog log)
+public class GatewayService(UsageService usageService, ModelService modelService, IEnumerable<IChatFilter>? chatFilters, ChatSetting chatSetting, ILog log, IProviderStatusManager? providerStatus = null)
 {
     #region 属性
     /// <summary>对话过滤器链（日志、监控等横切关注点），由 DI 解析</summary>
@@ -42,6 +50,8 @@ public class GatewayService(UsageService usageService, ModelService modelService
 
     /// <summary>重试最大等待时间（秒）</summary>
     private const Int32 MaxRetryDelaySec = 30;
+
+    private readonly IProviderStatusManager? _providerStatus = providerStatus;
 
     /// <summary>snake_case 序列化选项。用于写出符合 OpenAI / Anthropic 协议的响应体</summary>
     public static readonly JsonSerializerOptions SnakeCaseOptions;
@@ -109,28 +119,80 @@ public class GatewayService(UsageService usageService, ModelService modelService
     #endregion
 
     #region 消息构建
-    /// <summary>为网关请求构建上下文消息列表。注入系统提示词（用户信息+UserSetting+ModelConfig），过滤请求中原有系统消息</summary>
+    /// <summary>为网关请求构建上下文消息列表。注入系统提示词（AppKey系统指令 + 领域模式下的用户/项目信息），过滤请求中原有系统消息。
+    /// 领域模式关闭（纯净转发）时仅注入 AppKey 业务角色指令与客户端系统消息，不注入用户/项目上下文</summary>
     /// <param name="request">网关请求</param>
     /// <param name="appKey">应用密钥</param>
     /// <param name="config">模型配置</param>
+    /// <param name="domainMode">是否领域模式。false=纯净转发，仅保留密钥业务角色；true=注入用户/项目信息（领域智能体）</param>
     /// <returns>上下文消息列表</returns>
-    public IList<AiChatMessage> BuildContextMessages(IChatRequest request, AppKey appKey, ModelConfig config)
+    public IList<AiChatMessage> BuildContextMessages(IChatRequest request, AppKey appKey, ModelConfig config, Boolean domainMode = true)
     {
         var messages = new List<AiChatMessage>();
 
-        // 构建系统消息（包含用户信息 + UserSetting + ModelConfig SystemPrompt）
-        var sysMsg = MessageFlow.BuildSystemMessage(appKey.UserId, config);
-        if (sysMsg != null) messages.Add(sysMsg);
+        // 收集请求中的客户端系统提示词
+        // Content 反序列化后可能是 String、JsonElement（System.Text.Json 原生）或 IList<Object>（NewLife SystemJson）
+        // 用 GetMessageText() 统一提取文本，避免 as String 在 JsonElement 场景静默返回 null
+        var clientSysParts = (request.Messages ?? [])
+            .Where(m => m.Role?.Equals("system", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(m => GetMessageText(m.Content))
+            .Where(c => !String.IsNullOrWhiteSpace(c))
+            .ToList();
 
-        // 添加请求中的对话消息（跳过系统消息，已由管道注入）
+        // 合并系统消息：优先级从高到低为 AppKey系统指令 > 领域信息 > 客户端注入
+        // AppKey.SystemPrompt 置于最前，定义业务角色与场景约束，后续各层可叠加但不应覆盖
+        var sysParts = new List<String>();
+        if (!String.IsNullOrWhiteSpace(appKey.SystemPrompt))
+            sysParts.Add(appKey.SystemPrompt.Trim());
+
+        // 领域模式：根据接入类型选择系统消息版本（纯净转发模式跳过，避免泄露用户/项目上下文）
+        // - 个人密钥（ProjectId == 0）：注入用户信息 + 个性化设置，与 Web 一致
+        // - 项目密钥（ProjectId > 0）：融合"项目 + 个人"双维系统提示词
+        //   （个人由 GatewayController 按请求顶层 user 字段解析、限项目成员后注入 ResolvedUserId）
+        if (domainMode)
+        {
+#if STARCHAT
+            var sysMsg = appKey.ProjectId > 0
+                ? MessageFlow.BuildSystemMessageForGateway(ResolveGatewayUserId(request), appKey.ProjectId, config)
+                : MessageFlow.BuildSystemMessage(appKey.UserId, config);
+#else
+            var sysMsg = MessageFlow.BuildSystemMessage(appKey.UserId, config);
+#endif
+            if (sysMsg != null)
+            {
+                var sysMsgText = GetMessageText(sysMsg.Content);
+                if (!String.IsNullOrWhiteSpace(sysMsgText))
+                    sysParts.Add(sysMsgText);
+            }
+        }
+
+        sysParts.AddRange(clientSysParts);
+
+        if (sysParts.Count > 0)
+            messages.Add(new AiChatMessage { Role = "system", Content = String.Join("\n\n", sysParts) });
+
+        // 添加请求中的非系统对话消息
         foreach (var msg in request.Messages ?? [])
         {
             if (msg.Role?.Equals("system", StringComparison.OrdinalIgnoreCase) == true) continue;
             messages.Add(msg);
         }
 
+        // 模型配置启用提示缓存时，给 system prompt 和首条用户消息打上 cache_control 标记
+        // EnablePromptCache 已硬编码为 true，依赖 ModelConfig 的 EnablePromptCache 开关
+        //if (config.EnablePromptCache)
+        MessageFlow.ApplyCacheControl(messages, config);
+
         return messages;
     }
+
+#if STARCHAT
+    /// <summary>从请求扩展数据读取网关解析后的用户编号（GatewayController 注入，键见 StarChatMessageFlowForGateway.ResolvedUserIdItemKey）</summary>
+    /// <param name="request">网关请求</param>
+    /// <returns>解析后的用户编号，未注入时为 0</returns>
+    private static Int32 ResolveGatewayUserId(IChatRequest? request)
+        => request != null ? request[NewLife.StarChat.Services.StarChatMessageFlowForGateway.ResolvedUserIdItemKey].ToInt() : 0;
+#endif
     #endregion
 
     #region 请求转发
@@ -153,7 +215,8 @@ public class GatewayService(UsageService usageService, ModelService modelService
         using var client = clientBuilder.Build();
 
         ChatResponse? response = null;
-        var maxRetry = chatSetting.UpstreamRetryCount;
+        const Int32 maxRetry = 5;
+        Exception? lastError = null;
         for (var i = 0; i <= maxRetry; i++)
         {
             try
@@ -163,14 +226,27 @@ public class GatewayService(UsageService usageService, ModelService modelService
             }
             catch (HttpRequestException ex) when (Is429(ex) && i < maxRetry)
             {
+                lastError = ex;
                 var delay = GetRetryDelay(i);
                 log?.Info("上游限流 429，第 {0} 次重试，等待 {1}ms", i + 1, delay);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
+            catch (Exception ex) when (i < maxRetry)
+            {
+                // 非 429 错误（如 5xx、连接超时）：记录失败并继续重试
+                lastError = ex;
+                _providerStatus?.RecordFailure(model.ProviderId);
+                log?.Error("上游错误 {0}，第 {1} 次重试", ex.GetType().Name, i + 1);
+            }
         }
 
         if (response == null)
+        {
+            // 重试耗尽，记录最后一次失败
+            if (lastError != null)
+                _providerStatus?.RecordFailure(model.ProviderId);
             throw new InvalidOperationException("上游服务限流，重试次数已耗尽");
+        }
 
         // 写入用量记录（内部完成费用计算 + 配额累加）
         RecordUsage(appKey, model, request.ConversationId.ToLong(), response.Usage);
@@ -197,7 +273,8 @@ public class GatewayService(UsageService usageService, ModelService modelService
         using var streamClient = streamBuilder.Build();
 
         IAsyncEnumerable<IChatResponse>? stream = null;
-        var maxRetry = chatSetting.UpstreamRetryCount;
+        const Int32 maxRetry = 5;
+        Exception? lastError = null;
         for (var i = 0; i <= maxRetry; i++)
         {
             try
@@ -207,14 +284,27 @@ public class GatewayService(UsageService usageService, ModelService modelService
             }
             catch (HttpRequestException ex) when (Is429(ex) && i < maxRetry)
             {
+                lastError = ex;
                 var delay = GetRetryDelay(i);
                 log?.Info("上游限流 429，第 {0} 次重试，等待 {1}ms", i + 1, delay);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
+            catch (Exception ex) when (i < maxRetry)
+            {
+                // 非 429 错误（如 5xx、连接超时）：记录失败并继续重试
+                lastError = ex;
+                _providerStatus?.RecordFailure(config.ProviderId);
+                log?.Error("上游错误 {0}，第 {1} 次重试", ex.GetType().Name, i + 1);
+            }
         }
 
         if (stream == null)
+        {
+            // 重试耗尽，记录最后一次失败
+            if (lastError != null)
+                _providerStatus?.RecordFailure(config.ProviderId);
             throw new InvalidOperationException("上游服务限流，重试次数已耗尽");
+        }
 
         UsageDetails? lastUsage = null;
         await foreach (var rawChunk in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -233,8 +323,9 @@ public class GatewayService(UsageService usageService, ModelService modelService
     /// <summary>将 ChatStreamEvent 转换为 OpenAI 兼容的 ChatResponse 流式块</summary>
     /// <param name="evt">管道事件</param>
     /// <param name="model">模型编码</param>
+    /// <param name="hasToolCalls">本轮是否已发出工具调用事件；仅在 evt 未携带 finish_reason 时作为回退依据</param>
     /// <returns>ChatResponse；不需要输出的事件返回 null</returns>
-    public static ChatResponse? ConvertEventToChunk(ChatStreamEvent evt, String? model)
+    public static ChatResponse? ConvertEventToChunk(ChatStreamEvent evt, String? model, Boolean hasToolCalls = false)
     {
         var chunk = new ChatResponse
         {
@@ -251,8 +342,21 @@ public class GatewayService(UsageService usageService, ModelService modelService
             case "thinking_delta":
                 chunk.AddDelta(null, evt.Content);
                 return chunk;
+            case "tool_call_start":
+                chunk.AddToolCallDelta(evt.ToolCallId, evt.Name, evt.Arguments);
+                return chunk;
+            case "tool_call_done":
+                chunk.AddToolCallDelta(evt.ToolCallId, evt.Name, evt.Result, FinishReason.ToolCalls);
+                return chunk;
+            case "tool_call_error":
+                chunk.AddToolCallDelta(evt.ToolCallId, evt.Name, evt.Error, FinishReason.ToolCalls);
+                return chunk;
             case "message_done":
-                chunk.AddDelta(null, finishReason: FinishReason.Stop);
+                // 优先使用 MessageFlow 携带的真实 finish_reason（LLM 最终轮返回值），
+                // 彻底解决两类问题：①工具回合被后续 stop 覆盖（工具永不执行）；②服务端工具多轮循环后 finish_reason 缺失
+                // 无事件值时（手动构造的 message_done）回退：工具回合输出 tool_calls，否则 stop
+                var fr = evt.FinishReason ?? (hasToolCalls ? FinishReason.ToolCalls.ToApiString() : FinishReason.Stop.ToApiString());
+                chunk.AddDelta(null, finishReason: FinishReasonHelper.Parse(fr));
                 if (evt.Usage != null) chunk.Usage = evt.Usage;
                 return chunk;
             default:
@@ -280,6 +384,14 @@ public class GatewayService(UsageService usageService, ModelService modelService
                 {
                     var geminiChunk = GeminiResponse.FromChunk(chunk);
                     events.Add($"data: {JsonSerializer.Serialize(geminiChunk, CamelCaseOptions)}\n\n");
+                    break;
+                }
+            case GatewayProtocol.Ollama:
+            case GatewayProtocol.OllamaGenerate:
+                {
+                    // Ollama 流式采用 NDJSON 格式：每帧一行 JSON，无 data: 前缀、无 [DONE]
+                    var frame = BuildOllamaStreamFrame(chunk, protocol == GatewayProtocol.OllamaGenerate);
+                    if (frame != null) events.Add(frame + "\n");
                     break;
                 }
             default:
@@ -322,6 +434,10 @@ public class GatewayService(UsageService usageService, ModelService modelService
                 return $"event: {stopEvt.EventName}\ndata: {stopJson}\n\n";
             case GatewayProtocol.Gemini:
                 return null;
+            case GatewayProtocol.Ollama:
+            case GatewayProtocol.OllamaGenerate:
+                // Ollama 的 done=true 末帧由 message_done 事件对应的流式块输出，此处无需额外结束标记
+                return null;
             default:
                 return "data: [DONE]\n\n";
         }
@@ -337,12 +453,138 @@ public class GatewayService(UsageService usageService, ModelService modelService
         {
             GatewayProtocol.Anthropic => JsonSerializer.Serialize(AnthropicResponse.From(result), SnakeCaseOptions),
             GatewayProtocol.Gemini => JsonSerializer.Serialize(GeminiResponse.From(result), CamelCaseOptions),
+            GatewayProtocol.Ollama => JsonSerializer.Serialize(OllamaChatResponse.From(result), SnakeCaseOptions),
+            GatewayProtocol.OllamaGenerate => JsonSerializer.Serialize(OllamaGenerateResponse.From(result), SnakeCaseOptions),
             _ => JsonSerializer.Serialize(ChatCompletionResponse.From(result), SnakeCaseOptions),
         };
     }
     #endregion
 
     #region 辅助
+    /// <summary>构建 Ollama NDJSON 流式帧（chat 或 generate 风格）</summary>
+    /// <param name="chunk">内部统一流式块</param>
+    /// <param name="generate">是否为 generate 协议（response 顶级字段风格，区别于 chat 的 message 嵌套）</param>
+    /// <returns>NDJSON 帧 JSON 字符串，无需输出时返回 null</returns>
+    /// <remarks>
+    /// Ollama 流式协议要点：
+    /// <list type="bullet">
+    /// <item>内容帧：<c>{"model","created_at","message":{"role":"assistant","content"},"done":false}</c></item>
+    /// <item>思考帧：message 携带 thinking 字段（Ollama 原生思考字段）</item>
+    /// <item>工具帧：message 携带 tool_calls，arguments 为对象而非字符串</item>
+    /// <item>结束帧：由 message_done 事件输出 <c>{"done":true,"done_reason","prompt_eval_count","eval_count"}</c></item>
+    /// </list>
+    /// </remarks>
+    private static String? BuildOllamaStreamFrame(ChatResponse chunk, Boolean generate)
+    {
+        var msg = chunk.Messages?.FirstOrDefault();
+        if (msg == null) return null;
+
+        var created = FormatOllamaTime(chunk.Created > DateTimeOffset.MinValue ? chunk.Created : DateTimeOffset.UtcNow);
+
+        // 结束帧：message_done 事件携带 finish_reason
+        if (msg.FinishReason != null)
+        {
+            var frame = new Dictionary<String, Object?>
+            {
+                ["model"] = chunk.Model,
+                ["created_at"] = created,
+                ["done"] = true,
+                ["done_reason"] = msg.FinishReason == FinishReason.ToolCalls ? "tool_calls" : "stop",
+            };
+            if (chunk.Usage != null)
+            {
+                frame["prompt_eval_count"] = chunk.Usage.InputTokens;
+                frame["eval_count"] = chunk.Usage.OutputTokens;
+            }
+            return JsonSerializer.Serialize(frame, SnakeCaseOptions);
+        }
+
+        var delta = msg.Delta;
+        if (delta == null) return null;
+
+        // 内容帧：generate 风格 response / thinking 为顶级字段
+        if (generate)
+        {
+            var gframe = new Dictionary<String, Object?>
+            {
+                ["model"] = chunk.Model,
+                ["created_at"] = created,
+                ["done"] = false,
+            };
+            if (delta.Content != null) gframe["response"] = delta.Content + "";
+            if (!delta.ReasoningContent.IsNullOrEmpty()) gframe["thinking"] = delta.ReasoningContent;
+            if (!gframe.ContainsKey("response") && !gframe.ContainsKey("thinking")) return null;
+            return JsonSerializer.Serialize(gframe, SnakeCaseOptions);
+        }
+
+        // chat 风格：内容/思考/工具调用统一放入 message 嵌套对象
+        var message = new Dictionary<String, Object?>
+        {
+            ["role"] = "assistant",
+        };
+        if (delta.Content != null)
+            message["content"] = delta.Content + "";
+        else if (!delta.ReasoningContent.IsNullOrEmpty())
+            message["thinking"] = delta.ReasoningContent;
+        else if (delta.ToolCalls is { Count: > 0 })
+            message["tool_calls"] = BuildOllamaToolCalls(delta.ToolCalls);
+        else
+            return null;
+
+        var frame2 = new Dictionary<String, Object?>
+        {
+            ["model"] = chunk.Model,
+            ["created_at"] = created,
+            ["message"] = message,
+            ["done"] = false,
+        };
+        return JsonSerializer.Serialize(frame2, SnakeCaseOptions);
+    }
+
+    /// <summary>构建 Ollama 工具调用数组。arguments JSON 字符串解析为对象，Ollama 协议要求 arguments 为对象</summary>
+    /// <param name="toolCalls">内部工具调用列表</param>
+    /// <returns>Ollama 格式工具调用数组</returns>
+    private static Object BuildOllamaToolCalls(IList<ToolCall> toolCalls)
+    {
+        var list = new List<Object>(toolCalls.Count);
+        foreach (var tc in toolCalls)
+        {
+            Object? args;
+            var argsStr = tc.Function?.Arguments;
+            if (!argsStr.IsNullOrEmpty())
+                args = JsonParser.Decode(argsStr) ?? (Object)argsStr;
+            else
+                args = new Dictionary<String, Object?>();
+
+            list.Add(new Dictionary<String, Object?>
+            {
+                ["function"] = new Dictionary<String, Object?>
+                {
+                    ["name"] = tc.Function?.Name,
+                    ["arguments"] = args,
+                },
+            });
+        }
+        return list;
+    }
+
+    /// <summary>格式化 Ollama 时间戳。RFC3339 UTC 格式（如 2026-08-05T10:00:00.123Z），与 Ollama 官方响应一致</summary>
+    /// <param name="time">时间</param>
+    /// <returns>Ollama 格式时间字符串</returns>
+    private static String FormatOllamaTime(DateTimeOffset time) => time.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+
+    /// <summary>从 ChatMessage.Content（Object?）中提取纯文本字符串。
+    /// Content 在反序列化后可能是 String、JsonElement 或 IList 等类型，统一处理</summary>
+    /// <param name="content">消息 Content 值</param>
+    /// <returns>文本内容，无法提取时返回 null</returns>
+    private static String? GetMessageText(Object? content) => content switch
+    {
+        null => null,
+        String s => s,
+        JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString(),
+        _ => content.ToString(),
+    };
+
     /// <summary>判断异常是否为 HTTP 429 限流</summary>
     /// <param name="ex">HTTP 请求异常</param>
     /// <returns></returns>
@@ -384,7 +626,7 @@ public class GatewayService(UsageService usageService, ModelService modelService
             UserId = appKey?.UserId ?? 0,
             AppKeyId = appKey?.Id ?? 0,
         };
-        usageService.Record(conv, null, model, usage, "Gateway");
+        usageService.Record(conv, null, appKey, model, usage, "Gateway");
     }
 
     /// <summary>从 AI 消息中提取纯文本内容。支持多模态消息（Contents 列表中提取 TextContent）</summary>
@@ -425,32 +667,38 @@ public class GatewayService(UsageService usageService, ModelService modelService
     /// <param name="request">对话请求</param>
     /// <param name="config">模型配置</param>
     /// <param name="appKey">应用密钥</param>
-    /// <returns>会话编号，失败时返回 0</returns>
-    public Int64 CreateGatewayConversation(IChatRequest request, ModelConfig config, AppKey appKey)
+    /// <returns>会话，失败时返回 null</returns>
+    public Conversation? CreateGatewayConversation(IChatRequest request, ModelConfig config, AppKey appKey)
     {
         try
         {
             var lastUserMsg = request.Messages?.LastOrDefault(m => "user".Equals(m.Role, StringComparison.OrdinalIgnoreCase));
             var userContent = ExtractTextContent(lastUserMsg);
-            if (userContent.IsNullOrEmpty()) return 0;
+            if (userContent.IsNullOrEmpty()) return null;
 
             var conversation = new Conversation
             {
+#if STARCHAT
+                UserId = appKey.ProjectId > 0 ? 0 : appKey.UserId,
+#else
                 UserId = appKey.UserId,
+#endif
                 UserName = appKey.Name,
+                AppKeyId = appKey.Id,
                 Title = userContent.Length > 50 ? userContent[..50] + "..." : userContent,
                 ModelId = config.Id,
                 ModelName = config.Name,
                 Source = "Gateway",
                 LastMessageTime = DateTime.Now,
+                Enable = true,
             };
-            conversation.Insert();
-            return conversation.Id;
+            //conversation.Insert();
+            return conversation;
         }
         catch (Exception ex)
         {
             log?.Error("预创建网关会话失败: {0}", ex.Message);
-            return 0;
+            return null;
         }
     }
 
@@ -461,7 +709,7 @@ public class GatewayService(UsageService usageService, ModelService modelService
     /// <param name="responseContent">AI 回复内容</param>
     /// <param name="thinkingContent">思考过程</param>
     /// <param name="usage">Token 用量统计</param>
-    public void RecordGatewayConversation(IChatRequest request, ModelConfig config, AppKey appKey, String? responseContent, String? thinkingContent, UsageDetails? usage)
+    public virtual async Task RecordGatewayConversationAsync(IChatRequest request, ModelConfig config, AppKey appKey, String? responseContent, String? thinkingContent, UsageDetails? usage)
     {
         try
         {
@@ -470,30 +718,36 @@ public class GatewayService(UsageService usageService, ModelService modelService
             var userContent = ExtractTextContent(lastUserMsg);
             if (userContent.IsNullOrEmpty()) return;
 
-            Conversation? conversation;
+            // 提取并保存用户消息中的附件（图片、文档、音频等）
+            var attachmentsJson = await SaveGatewayAttachmentsAsync(lastUserMsg).ConfigureAwait(false);
+
             var existingId = request.ConversationId.ToLong();
-            if (existingId > 0)
+
+            // 复用预创建的会话，补充用量统计
+            var conversation = Conversation.FindById(existingId);
+            if (conversation != null)
             {
-                // 复用预创建的会话，补充用量统计
-                conversation = Conversation.FindById(existingId);
-                if (conversation != null)
-                {
-                    conversation.MessageCount = responseContent.IsNullOrEmpty() ? 1 : 2;
-                    conversation.InputTokens = usage?.InputTokens ?? 0;
-                    conversation.OutputTokens = usage?.OutputTokens ?? 0;
-                    conversation.TotalTokens = usage?.TotalTokens ?? 0;
-                    conversation.ElapsedMs = usage?.ElapsedMs ?? 0;
-                    conversation.LastMessageTime = DateTime.Now;
-                    conversation.Update();
-                }
+                conversation.MessageCount = responseContent.IsNullOrEmpty() ? 1 : 2;
+                conversation.InputTokens = usage?.InputTokens ?? 0;
+                conversation.OutputTokens = usage?.OutputTokens ?? 0;
+                conversation.TotalTokens = usage?.TotalTokens ?? 0;
+                conversation.ElapsedMs = usage?.ElapsedMs ?? 0;
+                conversation.LastMessageTime = DateTime.Now;
+                OnConversationSaving(conversation, config, usage);
+                conversation.Update();
             }
             else
             {
                 // 未预创建时回退到直接插入
                 conversation = new Conversation
                 {
+#if STARCHAT
+                    UserId = appKey.ProjectId > 0 ? 0 : appKey.UserId,
+#else
                     UserId = appKey.UserId,
+#endif
                     UserName = appKey.Name,
+                    AppKeyId = appKey.Id,
                     Title = userContent.Length > 50 ? userContent[..50] + "..." : userContent,
                     ModelId = config.Id,
                     ModelName = config.Name,
@@ -504,7 +758,9 @@ public class GatewayService(UsageService usageService, ModelService modelService
                     OutputTokens = usage?.OutputTokens ?? 0,
                     TotalTokens = usage?.TotalTokens ?? 0,
                     ElapsedMs = usage?.ElapsedMs ?? 0,
+                    Enable = true,
                 };
+                OnConversationSaving(conversation, config, usage);
                 conversation.Insert();
             }
 
@@ -516,7 +772,9 @@ public class GatewayService(UsageService usageService, ModelService modelService
                 ConversationId = conversation.Id,
                 Role = "user",
                 Content = userContent,
-                InputTokens = usage?.InputTokens ?? 0,
+                Attachments = attachmentsJson,
+                //InputTokens = usage?.InputTokens ?? 0,
+                Enable = true,
             };
             userMsg.Insert();
 
@@ -529,10 +787,14 @@ public class GatewayService(UsageService usageService, ModelService modelService
                     Role = "assistant",
                     Content = responseContent,
                     ThinkingContent = thinkingContent.IsNullOrEmpty() ? null : thinkingContent,
+                    ModelName = config.Code,
+                    InputTokens = usage?.InputTokens ?? 0,
                     OutputTokens = usage?.OutputTokens ?? 0,
                     TotalTokens = usage?.TotalTokens ?? 0,
                     ElapsedMs = usage?.ElapsedMs ?? 0,
+                    Enable = true,
                 };
+                OnAssistantMessageSaving(assistantMsg, config, usage);
                 assistantMsg.Insert();
             }
         }
@@ -542,5 +804,146 @@ public class GatewayService(UsageService usageService, ModelService modelService
             log?.Error("网关对话记录失败: {0}", ex.Message);
         }
     }
+
+    /// <summary>提取并保存网关请求用户消息中的所有二进制附件（图片、文档、音频等）为附件记录</summary>
+    /// <remarks>
+    /// 支持 <see cref="ImageContent"/> / <see cref="DataContent"/> / <see cref="AudioContent"/> 三种二进制内嵌类型，
+    /// 以及通过 data URI 格式（<c>data:...;base64,...</c>）传输的任意媒体类型（如 PDF、DOCX）。
+    /// HTTP/HTTPS URL 附件不做下载，跳过处理。
+    /// </remarks>
+    /// <param name="message">用户消息</param>
+    /// <returns>附件 ID 列表 JSON（如 <c>[1001,1002]</c>），无附件时返回 null</returns>
+    private async Task<String?> SaveGatewayAttachmentsAsync(AiChatMessage? message)
+    {
+        if (message == null) return null;
+
+        message.ResolveContents();
+        if (message.Contents == null || message.Contents.Count == 0) return null;
+
+        var ids = new List<Int64>();
+        foreach (var item in message.Contents)
+        {
+            Byte[]? bytes = null;
+            var mediaType = "application/octet-stream";
+
+            if (item is ImageContent img)
+            {
+                if (img.Data != null)
+                {
+                    bytes = img.Data;
+                    mediaType = img.MediaType ?? "image/jpeg";
+                }
+                else if (!img.Uri.IsNullOrEmpty() && img.Uri.StartsWith("data:"))
+                {
+                    (bytes, mediaType) = ParseDataUri(img.Uri, "image/jpeg");
+                }
+                // HTTP/HTTPS URL：不做下载，跳过
+                else continue;
+            }
+            else if (item is DataContent dc)
+            {
+                bytes = dc.Data;
+                mediaType = dc.MediaType;
+            }
+            else if (item is AudioContent ac && ac.Data != null)
+            {
+                bytes = ac.Data;
+                mediaType = ac.MediaType;
+            }
+            else continue;
+
+            if (bytes == null || bytes.Length == 0) continue;
+
+            try
+            {
+                var ext = GetExtensionByMediaType(mediaType);
+                var fileName = $"gw_{DateTime.Now:yyyyMMddHHmmssfff}{ext}";
+
+                var att = new Attachment
+                {
+                    FileName = fileName,
+                    Category = "ChatAI",
+                    ContentType = mediaType,
+                    Size = bytes.Length,
+                    Enable = true,
+                    UploadTime = DateTime.Now,
+                };
+
+                using var ms = new MemoryStream(bytes);
+                var saved = await att.SaveFile(ms, null, fileName).ConfigureAwait(false);
+                if (saved) ids.Add(att.Id);
+            }
+            catch (Exception ex)
+            {
+                log?.Error("保存网关附件失败: {0}", ex.Message);
+            }
+        }
+
+        return ids.Count > 0 ? ids.ToJson() : null;
+    }
+
+    /// <summary>解析 data URI，返回字节数组和媒体类型</summary>
+    /// <param name="uri">data URI，格式为 <c>data:{mediaType};base64,{base64Data}</c></param>
+    /// <param name="defaultMediaType">解析失败时的默认媒体类型</param>
+    /// <returns>bytes 为 null 表示解析失败</returns>
+    private static (Byte[]? Bytes, String MediaType) ParseDataUri(String uri, String defaultMediaType)
+    {
+        var comma = uri.IndexOf(',');
+        if (comma <= 0) return (null, defaultMediaType);
+
+        var meta = uri[5..comma]; // 跨过 "data:" 前缀
+        var base64 = uri[(comma + 1)..];
+        var semiColon = meta.IndexOf(';');
+        var mediaType = semiColon > 0 ? meta[..semiColon] : meta;
+        if (mediaType.IsNullOrEmpty()) mediaType = defaultMediaType;
+
+        try { return (Convert.FromBase64String(base64), mediaType); }
+        catch { return (null, mediaType); }
+    }
+
+    /// <summary>根据 MIME 类型返回文件扩展名</summary>
+    /// <param name="mediaType">MIME 类型，如 <c>image/png</c></param>
+    /// <returns>文件扩展名，包含点，如 <c>.png</c></returns>
+    private static String GetExtensionByMediaType(String mediaType) => mediaType switch
+    {
+        "image/jpeg" or "image/jpg" => ".jpg",
+        "image/png" => ".png",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/bmp" => ".bmp",
+        "application/pdf" => ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
+        "application/msword" => ".doc",
+        "application/vnd.ms-excel" => ".xls",
+        "text/markdown" or "text/x-markdown" => ".md",
+        "text/plain" => ".txt",
+        "text/html" => ".html",
+        "text/csv" => ".csv",
+        "audio/wav" or "audio/x-wav" => ".wav",
+        "audio/mpeg" or "audio/mp3" => ".mp3",
+        "audio/ogg" => ".ogg",
+        "audio/webm" => ".webm",
+        "audio/aac" => ".aac",
+        "video/mp4" => ".mp4",
+        "video/webm" => ".webm",
+        _ when mediaType.StartsWith("image/") => ".jpg",
+        _ when mediaType.StartsWith("audio/") => ".mp3",
+        _ when mediaType.StartsWith("video/") => ".mp4",
+        _ => ".bin",
+    };
+
+    /// <summary>保存会话前的钩子。子类可重写以设置扩展字段（如 StarChat 的 TotalCost）</summary>
+    /// <param name="conversation">即将保存的会话实体</param>
+    /// <param name="config">模型配置</param>
+    /// <param name="usage">Token 用量统计</param>
+    protected virtual void OnConversationSaving(Conversation conversation, ModelConfig config, UsageDetails? usage) { }
+
+    /// <summary>保存助手消息前的钩子。子类可重写以设置扩展字段（如 StarChat 的 TotalCost）</summary>
+    /// <param name="assistantMsg">即将保存的助手消息实体</param>
+    /// <param name="config">模型配置</param>
+    /// <param name="usage">Token 用量统计</param>
+    protected virtual void OnAssistantMessageSaving(DbChatMessage assistantMsg, ModelConfig config, UsageDetails? usage) { }
     #endregion
 }

@@ -93,6 +93,8 @@ public class GeminiResponse : IChatResponse
                     InputTokens = UsageMetadata.PromptTokenCount,
                     OutputTokens = UsageMetadata.CandidatesTokenCount,
                     TotalTokens = UsageMetadata.TotalTokenCount,
+                    ReasoningTokens = UsageMetadata.ThoughtsTokenCount,
+                    CachedInputTokens = UsageMetadata.CachedContentTokenCount,
                 };
             }
             return _usageDetails;
@@ -100,7 +102,7 @@ public class GeminiResponse : IChatResponse
         set => _usageDetails = value;
     }
 
-    /// <summary>首条回复文本</summary>
+    /// <summary>首条回复文本。仅含正文，跳过 thought=true 的思考内容（思考应走 <see cref="ChatMessage.ReasoningContent"/>）</summary>
     [IgnoreDataMember]
     public String? Text
     {
@@ -108,7 +110,7 @@ public class GeminiResponse : IChatResponse
         {
             var parts = Candidates?.FirstOrDefault()?.Content?.Parts;
             if (parts == null) return null;
-            return String.Join("", parts.Where(p => p.Text != null).Select(p => p.Text));
+            return String.Join("", parts.Where(p => p.Text != null && p.Thought != true).Select(p => p.Text));
         }
     }
     #endregion
@@ -141,7 +143,8 @@ public class GeminiResponse : IChatResponse
 
                 if (toolCalls?.Count > 0)
                 {
-                    var msg = streaming ? (choice.Delta ??= new ChatMessage { Role = "model" }) : (choice.Message ??= new ChatMessage { Role = "model" });
+                    // A-73：与 IChatResponse.Messages 适配器统一用 assistant 角色（下游 FromChatRequest 负责转 model）
+                    var msg = streaming ? (choice.Delta ??= new ChatMessage { Role = "assistant" }) : (choice.Message ??= new ChatMessage { Role = "assistant" });
                     msg.ToolCalls = toolCalls;
                 }
             }
@@ -154,6 +157,8 @@ public class GeminiResponse : IChatResponse
                 InputTokens = UsageMetadata.PromptTokenCount,
                 OutputTokens = UsageMetadata.CandidatesTokenCount,
                 TotalTokens = UsageMetadata.TotalTokenCount,
+                ReasoningTokens = UsageMetadata.ThoughtsTokenCount,
+                CachedInputTokens = UsageMetadata.CachedContentTokenCount,
             };
         }
 
@@ -249,7 +254,8 @@ public class GeminiResponse : IChatResponse
     {
         "STOP" => FinishReason.Stop,
         "MAX_TOKENS" => FinishReason.Length,
-        "SAFETY" or "RECITATION" => FinishReason.ContentFilter,
+        // 安全/内容拦截类：SAFETY、RECITATION（版权）、BLOCKLIST、PROHIBITED_CONTENT、SPII（敏感个人信息）
+        "SAFETY" or "RECITATION" or "BLOCKLIST" or "PROHIBITED_CONTENT" or "SPII" => FinishReason.ContentFilter,
         _ => null,
     };
 
@@ -324,6 +330,12 @@ public class GeminiUsageMetadata
     /// <summary>总令牌数</summary>
     public Int32 TotalTokenCount { get; set; }
 
+    /// <summary>推理令牌数。Gemini 2.5 思考模型返回的 thinking 部分 Token 消耗</summary>
+    public Int32 ThoughtsTokenCount { get; set; }
+
+    /// <summary>命中缓存的输入令牌数</summary>
+    public Int32 CachedContentTokenCount { get; set; }
+
     /// <summary>从内部用量统计转换</summary>
     /// <param name="usage">内部用量统计</param>
     /// <returns>Gemini 格式用量</returns>
@@ -332,5 +344,7 @@ public class GeminiUsageMetadata
         PromptTokenCount = usage.InputTokens,
         CandidatesTokenCount = usage.OutputTokens,
         TotalTokenCount = usage.TotalTokens,
+        ThoughtsTokenCount = usage.ReasoningTokens,
+        CachedContentTokenCount = usage.CachedInputTokens,
     };
 }

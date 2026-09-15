@@ -10,7 +10,7 @@ namespace NewLife.ChatAI.Areas.ChatAI.Controllers;
 /// <summary>提供商配置。AI服务商的连接信息，一个协议类型可以有多个实例</summary>
 /// <remarks>实例化提供商配置控制器</remarks>
 /// <param name="modelService">模型服务</param>
-[Menu(120, true, Icon = "fa-table")]
+[Menu(9899, true, Icon = "fa-table", LastUpdate = "20260822")]
 [ChatAIArea]
 public class ProviderConfigController(ModelService modelService) : EntityController<ProviderConfig>
 {
@@ -81,5 +81,33 @@ public class ProviderConfigController(ModelService modelService) : EntityControl
         }
 
         return JsonRefresh(results.Count > 0 ? results.Join("；") : "未找到有效提供商");
+    }
+
+    /// <summary>批量初始化模型。对选中的提供商执行模型初始化：设置未锁定模型的能力、价格、默认 Settings</summary>
+    /// <returns></returns>
+    [EntityAuthorize(PermissionFlags.Update)]
+    public async Task<ActionResult> InitModels()
+    {
+        var ids = SelectKeys;
+        if (ids == null || ids.Length == 0) return JsonRefresh("请先选择提供商！");
+
+        var results = new List<String>();
+        foreach (var id in ids)
+        {
+            var config = ProviderConfig.FindById(id.ToInt());
+            if (config == null) continue;
+
+            try
+            {
+                var msg = await modelService.InitModelsByProviderAsync(config).ConfigureAwait(false);
+                results.Add(msg);
+            }
+            catch (Exception ex)
+            {
+                results.Add($"{config.Name} 初始化失败：{ex.Message}");
+            }
+        }
+
+        return JsonRefresh(results.Join("；"));
     }
 }

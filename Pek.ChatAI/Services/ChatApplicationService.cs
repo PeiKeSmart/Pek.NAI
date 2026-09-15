@@ -1,7 +1,4 @@
 ﻿using System.Text;
-using NewLife.AI.Models;
-using NewLife.ChatAI.Models;
-using NewLife.ChatAI.Entity;
 using NewLife.Data;
 using NewLife.Serialization;
 using XCode;
@@ -13,7 +10,7 @@ namespace NewLife.ChatAI.Services;
 /// <summary>数据库版对话应用服务。基于 XCode 实体类持久化数据</summary>
 /// <remarks>
 /// 对话内核层：负责会话与消息的持久化管理、分享、反馈、模型与用户设置等功能。
-/// 生成相关方法已提取到 <see cref="MessageService"/>。
+/// 生成相关方法已提取到 <see cref="MessageFlowForWeb"/>。
 /// </remarks>
 public class ChatApplicationService
 {
@@ -39,6 +36,7 @@ public class ChatApplicationService
             ModelName = request.ModelId > 0 ? ModelConfig.FindById(request.ModelId)?.Name : null,
             Source = "Web",
             LastMessageTime = DateTime.Now,
+            Enable = true,
         };
         entity.Insert();
 
@@ -94,28 +92,45 @@ public class ChatApplicationService
         var entity = Conversation.FindById(conversationId);
         if (entity == null || entity.UserId != userId) return Task.FromResult(false);
 
-        using var trans = ChatMessage.Meta.CreateTrans();
+        // 软删除：保留历史记录和用量记录，仅标记为停用
+        entity.Enable = false;
+        entity.Update();
 
-        // 获取关联的消息 ID 列表，用于清理消息反馈
+        // 软删除关联消息（不参与历史上下文构建，不展示给用户）
         var messages = ChatMessage.FindAllByConversationId(conversationId);
-        var messageIds = messages.Select(m => m.Id).ToArray();
+        foreach (var msg in messages)
+        {
+            msg.Enable = false;
+            msg.Update();
+        }
 
-        // 删除关联的用量记录
-        var usageRecords = UsageRecord.FindAllByConversationId(conversationId);
-        usageRecords.Delete();
-
-        // 删除关联的消息
-        messages.Delete();
-
-        // 删除关联的共享
+        // 删除关联的共享链接（分享链接在会话删除后应失效）
         var shares = SharedConversation.FindAllByConversationId(conversationId);
         shares.Delete();
 
-        entity.Delete();
-
-        trans.Commit();
+        // 不删除用量记录：Token 消耗是实际发生的，不因会话删除而消除
 
         return Task.FromResult(true);
+    }
+
+    /// <summary>若会话无已启用消息则软删除。专用于前端切走时自动清理空会话，服务端权威判断防止前端误删</summary>
+    /// <param name="conversationId">会话编号</param>
+    /// <param name="userId">当前用户编号</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>true=会话确为空已删除；false=会话含消息未删除；null=会话不存在或无权访问</returns>
+    public Task<Boolean?> DeleteIfEmptyAsync(Int64 conversationId, Int32 userId, CancellationToken cancellationToken)
+    {
+        var entity = Conversation.FindById(conversationId);
+        if (entity == null || entity.UserId != userId || !entity.Enable) return Task.FromResult<Boolean?>(null);
+
+        // 服务端权威判断：是否存在已启用消息
+        if (ChatMessage.CountByConversationId(conversationId) > 0) return Task.FromResult<Boolean?>(false);
+
+        // 真正的空会话：软删除
+        entity.Enable = false;
+        entity.Update();
+
+        return Task.FromResult<Boolean?>(true);
     }
 
     /// <summary>置顶/取消置顶</summary>
@@ -142,7 +157,7 @@ public class ChatApplicationService
     public Boolean CanAccessConversation(Int64 conversationId, Int32 userId)
     {
         var conv = Conversation.FindById(conversationId);
-        return conv != null && conv.UserId == userId;
+        return conv != null && conv.UserId == userId && conv.Enable;
     }
 
     /// <summary>验证当前用户是否有权访问指定消息（通过所属会话校验）</summary>
@@ -285,9 +300,11 @@ public class ChatApplicationService
         // 获取当前最后一条消息的编号作为快照截止点
         var snapshotMessageId = ChatMessage.FindLastByConversationId(conversationId)?.Id ?? 0;
 
-        DateTime? expireTime = null;
-        if (request.ExpireHours is > 0)
-            expireTime = DateTime.Now.AddHours(request.ExpireHours.Value);
+        // ExpireMinutes 不合法时回退系统默认值，仍不合法则取30分钟
+        var minutes = request.ExpireMinutes is > 0
+            ? request.ExpireMinutes.Value
+            : ChatSetting.Current.ShareExpireMinutes > 0 ? ChatSetting.Current.ShareExpireMinutes : 30;
+        var expireTime = DateTime.Now.AddMinutes(minutes);
 
         var entity = new SharedConversation
         {
@@ -295,7 +312,7 @@ public class ChatApplicationService
             ShareToken = Guid.NewGuid().ToString("N"),
             SnapshotTitle = conversation.Title,
             SnapshotMessageId = snapshotMessageId,
-            ExpireTime = expireTime ?? DateTime.MinValue,
+            ExpireTime = expireTime,
             CreateUserID = user.ID,
             CreateUser = user.DisplayName ?? user.Name,
         };
@@ -318,9 +335,20 @@ public class ChatApplicationService
         if (share.ExpireTime > DateTime.MinValue && share.ExpireTime < DateTime.Now)
             return Task.FromResult<Object?>(null);
 
-        // 获取快照范围内的消息
+        // 获取快照范围内的已启用消息（FindByShareSnapshot 已过滤 Enable == true）
         var messages = ChatMessage.FindByShareSnapshot(share.ConversationId, share.SnapshotMessageId);
-        var items = messages.Select(m => ToMessageDto(m)).ToList();
+        var items = messages.Select(m =>
+        {
+            return new
+            {
+                Id = m.Id.ToString(),
+                ConversationId = m.ConversationId.ToString(),
+                m.Role,
+                Content = m.Content ?? String.Empty,
+                CreatedAt = m.CreateTime,
+                // ThinkingContent 和 ToolCalls 不对外暴露（分享页仅展示主要内容）
+            };
+        }).ToList();
 
         var result = new
         {
@@ -328,6 +356,10 @@ public class ChatApplicationService
             Messages = items,
             share.CreateTime,
             ExpireTime = share.ExpireTime > DateTime.MinValue ? (DateTime?)share.ExpireTime : null,
+            AnchorMessageId = share.SnapshotMessageId > 0 ? share.SnapshotMessageId.ToString() : (String?)null,
+            share.SnapshotTitle,
+            CreatorName = share.CreateUser,
+            SiteTitle = ChatSetting.Current.SiteTitle,
         };
         return Task.FromResult<Object?>(result);
     }
@@ -362,13 +394,15 @@ public class ChatApplicationService
         {
             return Task.FromResult(new[]
             {
-                new ModelInfoDto(0, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, 131_072),
-                new ModelInfoDto(0, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, 65_536),
-                new ModelInfoDto(0, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, 128_000),
+                new ModelInfoDto(0, "qwen-max", "Qwen-Max", true, true, true, false, false, false, false, false, 131_072),
+                new ModelInfoDto(0, "deepseek-r1", "DeepSeek-R1", true, true, false, false, false, false, false, false, 65_536),
+                new ModelInfoDto(0, "gpt-4o", "GPT-4o", true, true, true, false, false, false, false, false, 128_000),
             });
         }
 
-        var models = list.Select(e => new ModelInfoDto(e.Id, e.Code ?? String.Empty, e.Name ?? String.Empty, e.SupportThinking, e.SupportFunction, e.SupportVision, e.SupportAudio, e.SupportImage, e.SupportVideo, e.SupportEmbedding, e.ContextLength, e.ProviderInfo?.Name ?? "")).ToArray();
+        var models = list
+            .Where(e => e.IsChatModel)
+            .Select(e => new ModelInfoDto(e.Id, e.Code ?? String.Empty, e.Name ?? String.Empty, e.SupportThinking, e.SupportFunction, e.SupportVision, e.SupportAudio, e.SupportImage, e.SupportVideo, e.SupportSpeech, e.SupportEmbedding, e.ContextLength, e.ReasoningEfforts, e.ProviderInfo?.Name ?? "")).ToArray();
         return Task.FromResult(models);
     }
     #endregion
@@ -383,11 +417,18 @@ public class ChatApplicationService
         var entity = UserSetting.FindByUserId(userId);
         if (entity == null)
         {
-            // 返回默认设置
-            return Task.FromResult(new UserSettingsDto("zh-CN", "system", 16, "Enter", 0, ThinkingMode.Auto, 10, String.Empty, String.Empty, ResponseStyle.Balanced, String.Empty, false)
+            entity = new UserSetting
             {
+                UserId = userId,
+                Language = "zh-CN",
+                Theme = "system",
+                FontSize = 16,
+                SendShortcut = "Enter",
+                ContextRounds = 10,
+                DefaultSkill = "general",
                 EnableLearning = true,
-            });
+            };
+            if (userId > 0) entity.Insert(); // 新登录用户首次访问，持久化默认设置
         }
 
         return Task.FromResult(ToUserSettingsDto(entity));
@@ -420,10 +461,10 @@ public class ChatApplicationService
         entity.AllowTraining = settings.AllowTraining;
         entity.McpEnabled = settings.McpEnabled;
         entity.ShowToolCalls = settings.ShowToolCalls;
-        entity.ThinkingCollapsed = settings.ThinkingCollapsed;
         entity.DefaultSkill = settings.DefaultSkill;
         entity.EnableLearning = settings.EnableLearning;
         entity.ContentWidth = settings.ContentWidth;
+        entity.ThinkingLayout = settings.ThinkingLayout;
         entity.Save();
 
         return Task.FromResult(ToUserSettingsDto(entity));
@@ -435,7 +476,7 @@ public class ChatApplicationService
     /// <returns></returns>
     public Task<Stream> ExportUserDataAsync(Int32 userId, CancellationToken cancellationToken)
     {
-        var conversations = Conversation.FindAllByUserId(userId);
+        var conversations = Conversation.FindAllByUserId(userId, Int32.MaxValue);
 
         var result = new List<Object>();
 
@@ -494,6 +535,7 @@ public class ChatApplicationService
                 IsPinned = item.IsPinned,
                 CreateTime = item.CreateTime,
                 LastMessageTime = item.LastMessageTime,
+                Enable = true,
             };
             conv.Insert();
 
@@ -510,6 +552,7 @@ public class ChatApplicationService
                         ThinkingContent = msg.ThinkingContent,
                         ThinkingMode = (ThinkingMode)msg.ThinkingMode,
                         Attachments = msg.Attachments,
+                        Enable = true,
                         CreateTime = msg.CreateTime,
                         CreateUserID = userId,
                     };
@@ -557,24 +600,26 @@ public class ChatApplicationService
 
         var convIds = conversations.Select(e => e.Id).ToArray();
 
-        // 按会话维度级联删除，避免误删其他用户数据
-        // 删除关联的共享
+        // 删除关联的共享链接（分享链接在会话清除后应失效）
         var shares = SharedConversation.FindAllByConversationIds(convIds);
         shares.Delete();
 
-        // 获取关联的消息 ID
+        // 软删除关联消息
         var messages = ChatMessage.FindAllByConversationIds(convIds);
-        var msgIds = messages.Select(e => e.Id).ToArray();
+        foreach (var msg in messages)
+        {
+            msg.Enable = false;
+            msg.Update();
+        }
 
-        // 删除用量记录
-        var usageRecords = UsageRecord.FindAllByConversationIds(convIds);
-        usageRecords.Delete();
+        // 软删除会话（保留历史记录和用量记录）
+        foreach (var conv in conversations)
+        {
+            conv.Enable = false;
+            conv.Update();
+        }
 
-        // 删除消息
-        messages.Delete();
-
-        // 删除会话
-        conversations.Delete();
+        // 不删除用量记录：Token 消耗是实际发生的，不因会话清除而消除
 
         return Task.CompletedTask;
     }
@@ -590,7 +635,7 @@ public class ChatApplicationService
     /// <summary>转换消息实体为DTO</summary>
     /// <param name="entity">消息实体</param>
     /// <returns></returns>
-    private static MessageDto ToMessageDto(ChatMessage entity)
+    public static MessageDto ToMessageDto(ChatMessage entity)
     {
         // 反序列化 ToolCalls JSON
         IReadOnlyList<ToolCallDto>? toolCalls = null;
@@ -611,6 +656,7 @@ public class ChatApplicationService
             TotalTokens = entity.TotalTokens,
             FeedbackType = (Int32)entity.FeedbackType,
             FeedbackReason = entity.FeedbackReason,
+            ModelName = entity.ModelName,
         };
     }
 
@@ -633,10 +679,10 @@ public class ChatApplicationService
         {
             McpEnabled = entity.McpEnabled,
             ShowToolCalls = entity.ShowToolCalls,
-            ThinkingCollapsed = entity.ThinkingCollapsed,
             DefaultSkill = entity.DefaultSkill ?? "general",
             EnableLearning = entity.EnableLearning,
             ContentWidth = entity.ContentWidth,
+            ThinkingLayout = entity.ThinkingLayout,
         };
     #endregion
 }

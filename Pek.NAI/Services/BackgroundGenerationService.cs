@@ -29,6 +29,14 @@ public class BackgroundGenerationService(ILog log)
     /// <param name="onComplete">任务完成回调（成功/失败/取消均触发）</param>
     public void Register(Int64 messageId, IAsyncEnumerable<ChatStreamEvent> eventStream, Func<BackgroundTask, Task>? onComplete = null)
     {
+        // A-47：重复注册同 messageId 时，先取消并释放旧 CTS，避免资源泄漏与旧回调干扰
+        if (_cancellations.TryRemove(messageId, out var oldCts))
+        {
+            oldCts.Cancel();
+            oldCts.Dispose();
+        }
+        _tasks.TryRemove(messageId, out _);
+
         var cts = new CancellationTokenSource();
         var task = new BackgroundTask
         {
@@ -41,7 +49,7 @@ public class BackgroundGenerationService(ILog log)
         _cancellations[messageId] = cts;
 
         // 启动后台消费任务
-        _ = ConsumeAsync(task, eventStream, onComplete, cts.Token);
+        _ = ConsumeAsync(task, eventStream, onComplete, cts);
     }
 
     /// <summary>订阅事件流。从头回放全部已有事件，任务运行中则继续等待实时事件</summary>
@@ -111,8 +119,9 @@ public class BackgroundGenerationService(ILog log)
 
     #region 辅助
     /// <summary>后台消费事件流。将事件写入 BackgroundTask 供订阅者读取，同时收集完整内容供回调持久化</summary>
-    private async Task ConsumeAsync(BackgroundTask task, IAsyncEnumerable<ChatStreamEvent> eventStream, Func<BackgroundTask, Task>? onComplete, CancellationToken cancellationToken)
+    private async Task ConsumeAsync(BackgroundTask task, IAsyncEnumerable<ChatStreamEvent> eventStream, Func<BackgroundTask, Task>? onComplete, CancellationTokenSource cts)
     {
+        var cancellationToken = cts.Token;
         try
         {
             await foreach (var ev in eventStream.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -130,7 +139,14 @@ public class BackgroundGenerationService(ILog log)
                         task.ThinkingBuilder.Append(ev.Content);
                         break;
                     case "tool_call_start":
-                        task.ToolCalls.Add(new BackgroundToolCall(ev.ToolCallId + "", ev.Name + "", ev.Arguments));
+                        // 去重：流式 earlyStart（无参预览）与 Step1 完整参数 start 按 toolCallId 合并，
+                        // 已存在则仅更新 Arguments，避免持久化重复条目（与 MessageFlow.CoreStreamAsync 保持一致）
+                        var tcId = ev.ToolCallId + "";
+                        var existingTc = task.ToolCalls.FirstOrDefault(t => t.Id == tcId);
+                        if (existingTc != null)
+                            existingTc.Arguments = ev.Arguments;
+                        else
+                            task.ToolCalls.Add(new BackgroundToolCall(tcId, ev.Name + "", ev.Arguments));
                         break;
                     case "tool_call_done":
                         UpdateToolCall(task.ToolCalls, ev.ToolCallId, true, ev.Result);
@@ -165,8 +181,23 @@ public class BackgroundGenerationService(ILog log)
             task.EndTime = DateTime.Now;
             // 通知订阅者任务已结束（Subscribe 检查 Status 后退出）
             task.Notify();
-            if (_cancellations.TryRemove(task.MessageId, out var removedCts))
-                removedCts.Dispose();
+            // A-73：仅移除并释放自己持有的 CTS。若同 messageId 已重注册新任务，
+            // 当前条目属于新任务，不得误删（否则新任务永久失去取消能力）
+            if (_cancellations.TryGetValue(task.MessageId, out var current) && ReferenceEquals(current, cts)
+                && _cancellations.TryRemove(task.MessageId, out var removed) && ReferenceEquals(removed, cts))
+                removed.Dispose();
+
+            // 任务完成后延迟清理，给最后的订阅者回放机会（5分钟后移除，释放 StringBuilder 和事件列表）
+            // A-46：校验移除的是当前任务实例，防止同 messageId 新任务被旧清理回调误清空
+            _ = Task.Delay(TimeSpan.FromMinutes(5)).ContinueWith(_ =>
+            {
+                if (_tasks.TryGetValue(task.MessageId, out var current) && ReferenceEquals(current, task)
+                    && _tasks.TryRemove(task.MessageId, out var removed) && ReferenceEquals(removed, task))
+                {
+                    removed.ContentBuilder.Clear();
+                    removed.ThinkingBuilder.Clear();
+                }
+            });
 
             if (onComplete != null)
             {
@@ -231,7 +262,11 @@ public class BackgroundTask
 
     #region 事件通知
     private readonly List<ChatStreamEvent> _events = [];
+#if NET45
+    private volatile TaskCompletionSource<Boolean> _signal = new();
+#else
     private volatile TaskCompletionSource<Boolean> _signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+#endif
 
     /// <summary>当前等待句柄的 Task 快照。订阅者必须在读取事件“之前”取此快照，避免 Notify 丢失</summary>
     internal Task SignalTask => _signal.Task;
@@ -255,7 +290,11 @@ public class BackgroundTask
     /// <summary>唤醒所有等待中的订阅者</summary>
     internal void Notify()
     {
+#if NET45
+        var old = Interlocked.Exchange(ref _signal, new TaskCompletionSource<Boolean>());
+#else
         var old = Interlocked.Exchange(ref _signal, new TaskCompletionSource<Boolean>(TaskCreationOptions.RunContinuationsAsynchronously));
+#endif
         old.TrySetResult(true);
     }
 
@@ -266,7 +305,11 @@ public class BackgroundTask
     {
         if (signalTask.IsCompleted) return;
 
+#if NET45
+        var tcs = new TaskCompletionSource<Boolean>();
+#else
         var tcs = new TaskCompletionSource<Boolean>(TaskCreationOptions.RunContinuationsAsynchronously);
+#endif
         using var _ = cancellationToken.Register(static s => ((TaskCompletionSource<Boolean>)s!).TrySetResult(default), tcs);
         await Task.WhenAny(signalTask, tcs.Task).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();

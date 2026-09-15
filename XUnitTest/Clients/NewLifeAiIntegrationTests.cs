@@ -1,11 +1,14 @@
-﻿#nullable enable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using NewLife;
 using NewLife.AI.Clients;
 using NewLife.AI.Clients.OpenAI;
 using NewLife.AI.Models;
@@ -23,7 +26,7 @@ namespace XUnitTest.Clients;
 public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 {
     private const String ApiKey = "sk-NewLifeAI2026";
-    private const String TestModel = "qwen3.5-flash";
+    private const String TestModel = "qwen3.6-flash";
 
     private readonly AiClientDescriptor _descriptor = AiClientRegistry.Default.GetDescriptor("NewLifeAI")!;
     private readonly ChatAIWebAppFactory _factory;
@@ -73,7 +76,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
     private async Task<IChatResponse> ChatAsync(IChatRequest request, AiClientOptions? opts = null)
     {
         using var client = CreateClient();
-        return await client.GetResponseAsync(request);
+        return await client.GetResponseAsync(request, cancellationToken: default);
     }
 
     /// <summary>创建客户端并执行流式对话</summary>
@@ -87,7 +90,14 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
     /// <summary>创建 NewLifeAI 专用客户端（用于 ResponsesAsync/MessagesAsync 等扩展端点）</summary>
     private NewLifeAIChatClient CreateNewLifeAiClient() => CreateClient();
 
-    #region 元数据验证（不需要 AppKey）
+    #region 辅助方法
+
+    #endregion
+
+    /// <summary>标记需外部 NewLifeAI 服务的测试跳过</summary>
+
+
+    #region 元数据验证（不需要外部服务）
 
     [Fact]
     [DisplayName("元数据_Code正确")]
@@ -116,7 +126,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
     {
         Assert.NotNull(_descriptor.Models);
         Assert.NotEmpty(_descriptor.Models);
-        Assert.Contains(_descriptor.Models, m => m.Model.StartsWith("qwen3.5"));
+        Assert.Contains(_descriptor.Models, m => m.Model.StartsWith("qwen3.6"));
     }
 
     [Fact]
@@ -156,6 +166,26 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
             "你是一个只用JSON格式回答的助手，回答格式为：{\"reply\":\"内容\"}",
             "你好",
             100);
+        // 用 json_schema 强约束输出，确保模型返回 {"reply":"..."} 结构
+        request.ResponseFormat = new Dictionary<String, Object?>
+        {
+            ["type"] = "json_schema",
+            ["json_schema"] = new Dictionary<String, Object?>
+            {
+                ["name"] = "reply_schema",
+                ["strict"] = true,
+                ["schema"] = new Dictionary<String, Object?>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<String, Object?>
+                    {
+                        ["reply"] = new Dictionary<String, Object?> { ["type"] = "string" },
+                    },
+                    ["required"] = new[] { "reply" },
+                    ["additionalProperties"] = false,
+                },
+            },
+        };
 
         var response = await ChatAsync(request);
 
@@ -163,6 +193,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         var content = response.Messages?[0].Message?.Content as String;
         Assert.False(String.IsNullOrEmpty(content));
         Assert.Contains("{", content);
+        Assert.Contains("reply", content);
     }
 
     [Fact]
@@ -171,7 +202,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
     {
         var request = new ChatRequest
         {
-            Model = "qwen3.5-flash",
+            Model = "qwen3.6-flash",
             Messages =
             [
                 new ChatMessage { Role = "user", Content = "我的名字叫小明，请记住" },
@@ -428,8 +459,8 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         {
             response = await CreateNewLifeAiClient().ImageGenerationsAsync(
                 "A cute robot reading a book",
-                "qwen3.5-flash",
-                "1024x1024");
+                "qwen3.6-flash",
+                "1024*1024");
         }
         catch (ApiException ex)
         {
@@ -441,6 +472,37 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         }
 
         Assert.NotNull(response);
+
+        // 保存生成的图片到本地，供人工检查
+        if (response.Data != null)
+        {
+            for (var i = 0; i < response.Data.Length; i++)
+            {
+                var img = response.Data[i];
+                var suffix = response.Data.Length > 1 ? $"_{i}" : "";
+
+                if (!img.Url.IsNullOrEmpty())
+                {
+                    await SaveOutputFileAsync(img.Url, $"{nameof(ImageGenerationsAsync_ReturnsResponse)}{suffix}.png");
+                }
+                else if (!img.B64Json.IsNullOrEmpty())
+                {
+                    var bytes = Convert.FromBase64String(img.B64Json);
+                    await SaveOutputFileAsync(bytes, $"{nameof(ImageGenerationsAsync_ReturnsResponse)}{suffix}.png");
+                }
+                else if (!img.Content.IsNullOrEmpty())
+                {
+                    // Legacy content 字段可能为 base64 或 URL
+                    if (img.Content.StartsWith("http"))
+                        await SaveOutputFileAsync(img.Content, $"{nameof(ImageGenerationsAsync_ReturnsResponse)}{suffix}.png");
+                    else
+                    {
+                        var bytes = Convert.FromBase64String(img.Content);
+                        await SaveOutputFileAsync(bytes, $"{nameof(ImageGenerationsAsync_ReturnsResponse)}{suffix}.png");
+                    }
+                }
+            }
+        }
     }
 
     #endregion
@@ -503,5 +565,33 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.Equal("NewLifeAI", descriptor!.Code);
     }
 
+    #endregion
+
+    #region 辅助方法
+    /// <summary>将图片字节数据保存到 TestOutput/ 目录（带时间戳前缀），返回保存路径</summary>
+    private static async Task<String> SaveOutputFileAsync(Byte[] data, String fileName)
+    {
+        var dir = "../TestOutput".GetFullPath();
+        dir.EnsureDirectory(false);
+        var ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var savePath = Path.Combine(dir, $"{ts}_{fileName}");
+        await File.WriteAllBytesAsync(savePath, data);
+        XTrace.WriteLine($"[TestOutput] 文件已保存: {savePath}");
+        return savePath;
+    }
+
+    /// <summary>从 URL 下载文件并保存到 TestOutput/ 目录（带时间戳前缀），返回保存路径</summary>
+    private static async Task<String> SaveOutputFileAsync(String url, String fileName)
+    {
+        var dir = "../TestOutput".GetFullPath();
+        dir.EnsureDirectory(false);
+        var ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var savePath = Path.Combine(dir, $"{ts}_{fileName}");
+        using var http = new HttpClient();
+        var bytes = await http.GetByteArrayAsync(url);
+        await File.WriteAllBytesAsync(savePath, bytes);
+        XTrace.WriteLine($"[TestOutput] 文件已保存: {savePath}");
+        return savePath;
+    }
     #endregion
 }

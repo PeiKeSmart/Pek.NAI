@@ -22,6 +22,9 @@ public class MessageFlowContext : IChatContext
     /// <summary>技能编号（0 表示无技能）</summary>
     public Int32 SkillId { get; set; }
 
+    /// <summary>本轮已激活的技能列表。由 SkillActivationHandler 填充，按 Sort 降序。不含系统技能</summary>
+    public List<ISkill> ActivatedSkills { get; } = [];
+
     #endregion
 
     #region 实体引用
@@ -109,11 +112,12 @@ public class MessageFlowContext : IChatContext
     /// <summary>思考模式（IChatContext 新增）</summary>
     public ThinkingMode ThinkingMode { get; set; }
 
-    ///// <summary>系统提示词内容</summary>
-    //public String? SystemPrompt { get; set; }
+    /// <summary>待注入 system 消息的有序文本片段列表（中段）。各处理器在 OnBefore 阶段追加，MessageFlow 在所有 OnBefore 完成后统一 flush</summary>
+    public IList<String> SystemSegments { get; } = [];
 
-    ///// <summary>系统消息就绪回调</summary>
-    //public Action<String>? OnSystemReady { get; set; }
+    /// <summary>注入 system 消息末段的有序文本片段列表（末段）。在 <see cref="SystemSegments"/> 之后追加，
+    /// 紧贴 user 消息，供本轮 RAG 结果和痛觉信号使用</summary>
+    public IList<String> TailSegments { get; } = [];
 
     /// <summary>消息中 @ToolName 显式引用的工具名称集合</summary>
     public ISet<String> SelectedTools { get; } = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
@@ -121,11 +125,8 @@ public class MessageFlowContext : IChatContext
     /// <summary>本轮实际注入给模型的工具名称集合</summary>
     public ISet<String> AvailableToolNames { get; } = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>实际使用的最大 Token 数</summary>
-    public Int32 MaxTokens { get; set; }
-
-    /// <summary>实际使用的采样温度</summary>
-    public Double? Temperature { get; set; }
+    /// <summary>模型调用选项。由入口方法初始化并填充全部字段，各 Handler 可在 OnBefore 阶段读取或修改</summary>
+    public ChatOptions Options { get; set; } = new();
 
     /// <summary>完成原因</summary>
     public String? FinishReason { get; set; }
@@ -146,6 +147,9 @@ public class MessageFlowContext : IChatContext
     /// <inheritdoc />
     IChatMessage IChatContext.AssistantMessage { get => AssistantMessage; set => AssistantMessage = (DbChatMessage)value; }
 
+    /// <inheritdoc />
+    IList<ISkill> IChatContext.ActivatedSkills => ActivatedSkills;
+
     ///// <inheritdoc />
     //IList<AiChatMessage> IChatContext.ContextMessages { get => ContextMessages; set => ContextMessages = value; }
 
@@ -155,9 +159,6 @@ public class MessageFlowContext : IChatContext
 
     /// <summary>消息流来源。由各 MessageFlow 子类在构建上下文时设置，默认 Web</summary>
     public ChatFlowSource Source { get; set; } = ChatFlowSource.Web;
-
-    /// <summary>是否将消息持久化到数据库。false 时 UserMessage/AssistantMessage.Id 保持 0，不执行 Insert/Update</summary>
-    public Boolean PersistMessages { get; set; } = true;
 
     #endregion
 }

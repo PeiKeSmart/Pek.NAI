@@ -15,9 +15,6 @@ public class ChatStreamEvent
     /// <summary>模型编码</summary>
     public String? Model { get; set; }
 
-    /// <summary>思考模式</summary>
-    public ThinkingMode ThinkingMode { get; set; }
-
     /// <summary>文本内容。content_delta / thinking_delta 时的增量文本</summary>
     public String? Content { get; set; }
 
@@ -36,9 +33,6 @@ public class ChatStreamEvent
     /// <summary>工具返回结果</summary>
     public String? Result { get; set; }
 
-    /// <summary>是否成功</summary>
-    public Boolean Success { get; set; }
-
     /// <summary>错误信息</summary>
     public String? Error { get; set; }
 
@@ -48,24 +42,30 @@ public class ChatStreamEvent
     /// <summary>错误描述</summary>
     public String? Message { get; set; }
 
-    /// <summary>完成原因。stop/length/tool_calls/content_filter</summary>
-    public String? FinishReason { get; set; }
-
     /// <summary>令牌用量统计</summary>
     public UsageDetails? Usage { get; set; }
 
     /// <summary>会话标题。首条消息自动生成标题时返回</summary>
     public String? Title { get; set; }
+
+    /// <summary>资源 URL。TTS 分支下 message_done 时附带音频归档地址，前端收到后自动播放；扩展用于其他资源的引用</summary>
+    public String? Url { get; set; }
+
+    /// <summary>完成原因。message_done 时携带 LLM 最终轮的真实 finish_reason（stop/tool_calls/length 等），
+    /// 供网关直接透传，避免客户端把工具回合误判为普通文本回合</summary>
+    public String? FinishReason { get; set; }
+
+    /// <summary>知识引用列表。knowledge_refs 事件专用，JSON 数组 [{"id":1,"title":"xxx"}]</summary>
+    public String? KnowledgeRefs { get; set; }
     #endregion
 
     #region 工厂方法
     /// <summary>消息开始事件</summary>
     /// <param name="messageId">消息编号</param>
     /// <param name="model">模型编码</param>
-    /// <param name="thinkingMode">思考模式</param>
     /// <returns></returns>
-    public static ChatStreamEvent MessageStart(Int64 messageId, String model, ThinkingMode thinkingMode) =>
-        new() { Type = "message_start", MessageId = messageId, Model = model, ThinkingMode = thinkingMode };
+    public static ChatStreamEvent MessageStart(Int64 messageId, String model) =>
+        new() { Type = "message_start", MessageId = messageId, Model = model };
 
     /// <summary>思考增量事件</summary>
     /// <param name="content">思考内容</param>
@@ -88,21 +88,43 @@ public class ChatStreamEvent
     /// <summary>消息完成事件</summary>
     /// <param name="usage">用量统计</param>
     /// <param name="title">标题（可选）</param>
-    /// <param name="finishReason">完成原因（可选）</param>
+    /// <param name="url">资源 URL（TTS 分支专用，前端自动播放）</param>
+    /// <param name="finishReason">完成原因（可选）。LLM 最终轮的真实 finish_reason，供网关透传，避免客户端误判工具回合</param>
     /// <returns></returns>
-    public static ChatStreamEvent MessageDone(UsageDetails? usage = null, String? title = null, String? finishReason = null) =>
-        new() { Type = "message_done", Usage = usage, Title = title, FinishReason = finishReason };
+    public static ChatStreamEvent MessageDone(UsageDetails? usage = null, String? title = null, String? url = null, String? finishReason = null) =>
+        new() { Type = "message_done", Usage = usage, Title = title, Url = url, FinishReason = finishReason };
 
     /// <summary>错误事件</summary>
     /// <param name="code">错误码</param>
     /// <param name="message">错误描述</param>
     /// <returns></returns>
-    public static ChatStreamEvent ErrorEvent(String code, String message)
+    public static ChatStreamEvent ErrorEvent(String code, String message) => ErrorEvent(code, message, null);
+
+    /// <summary>错误事件。带异常时在 ai:StreamError 埋点上标记错误并保存异常栈，便于星尘监控定位根因</summary>
+    /// <param name="code">错误码</param>
+    /// <param name="message">错误描述</param>
+    /// <param name="ex">异常。可为 null，仅记录消息文本</param>
+    /// <returns></returns>
+    public static ChatStreamEvent ErrorEvent(String code, String message, Exception? ex)
     {
         using var span = DefaultTracer.Instance?.NewSpan("ai:StreamError", $"[{code}]{message}");
 
+        // 关键：标记为错误埋点。此前从不 SetError，导致星尘控制台显示"正常"且不保存异常栈，
+        // 生产环境的 Learning NRE / FormatException 解析失败等错误出现一两个月都无法定位根因
+        if (span != null && ex != null)
+            span.SetError(ex);
+
         return new() { Type = "error", Code = code, Message = message };
     }
+
+    /// <summary>SSE 保活心跳事件。无正式事件推送时每隔一段时间发送，防止反向代理因连接静默而断连</summary>
+    /// <returns></returns>
+    public static ChatStreamEvent Heartbeat() => new() { Type = "heartbeat" };
+
+    /// <summary>知识引用事件。携带 AI 回复中引用的知识条目元数据</summary>
+    /// <param name="knowledgeRefs">JSON 数组 [{"id":1,"title":"xxx"}]</param>
+    /// <returns></returns>
+    public static ChatStreamEvent KnowledgeRefsEvent(String knowledgeRefs) => new() { Type = "knowledge_refs", KnowledgeRefs = knowledgeRefs };
 
     /// <summary>工具调用开始事件</summary>
     /// <param name="toolCallId">调用编号</param>
@@ -115,10 +137,9 @@ public class ChatStreamEvent
     /// <summary>工具调用完成事件</summary>
     /// <param name="toolCallId">调用编号</param>
     /// <param name="result">返回结果</param>
-    /// <param name="success">是否成功</param>
     /// <returns></returns>
-    public static ChatStreamEvent ToolCallDone(String toolCallId, String? result, Boolean success) =>
-        new() { Type = "tool_call_done", ToolCallId = toolCallId, Result = result, Success = success };
+    public static ChatStreamEvent ToolCallDone(String toolCallId, String? result) =>
+        new() { Type = "tool_call_done", ToolCallId = toolCallId, Result = result };
 
     /// <summary>工具调用失败事件</summary>
     /// <param name="toolCallId">调用编号</param>
@@ -126,5 +147,6 @@ public class ChatStreamEvent
     /// <returns></returns>
     public static ChatStreamEvent ToolCallError(String toolCallId, String error) =>
         new() { Type = "tool_call_error", ToolCallId = toolCallId, Error = error };
+
     #endregion
 }

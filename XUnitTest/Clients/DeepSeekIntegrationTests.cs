@@ -32,7 +32,7 @@ public class DeepSeekIntegrationTests
     }
 
     /// <summary>从 config 目录或环境变量加载 ApiKey</summary>
-    public static String? LoadApiKey()
+    public static String LoadApiKey()
     {
         var configPath = "config/DeepSeek.key".GetFullPath();
         if (File.Exists(configPath))
@@ -83,7 +83,7 @@ public class DeepSeekIntegrationTests
     };
 
     /// <summary>创建客户端并执行非流式请求。遇到瞬发网络错误时最多重试 2 次</summary>
-    private async Task<IChatResponse> ChatAsync(IChatRequest request, AiClientOptions? opts = null)
+    private async Task<IChatResponse> ChatAsync(IChatRequest request, AiClientOptions opts = null)
     {
         var retries = 2;
         while (true)
@@ -91,7 +91,7 @@ public class DeepSeekIntegrationTests
             try
             {
                 using var client = new DeepSeekChatClient(opts ?? CreateOptions());
-                return await client.GetResponseAsync(request);
+                return await client.GetResponseAsync(request, cancellationToken: default);
             }
             catch (HttpRequestException ex) when (retries-- > 0 && IsTransientNetworkError(ex))
             {
@@ -105,7 +105,7 @@ public class DeepSeekIntegrationTests
         ex.InnerException is System.Net.Sockets.SocketException or IOException;
 
     /// <summary>创建客户端并执行流式请求</summary>
-    private async IAsyncEnumerable<IChatResponse> ChatStreamAsync(IChatRequest request, AiClientOptions? opts = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    private async IAsyncEnumerable<IChatResponse> ChatStreamAsync(IChatRequest request, AiClientOptions opts = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         using var client = new DeepSeekChatClient(opts ?? CreateOptions());
         await foreach (var chunk in client.GetStreamingResponseAsync(request, ct))
@@ -558,7 +558,7 @@ public class DeepSeekIntegrationTests
         var request = CreateSimpleRequest("deepseek-chat", "hi", 200);
         request.Stream = true;
 
-        String? objectField = null;
+        String objectField = null;
         await foreach (var chunk in ChatStreamAsync(request))
         {
             if (chunk.Object != null)
@@ -604,7 +604,7 @@ public class DeepSeekIntegrationTests
         var request = CreateSimpleRequest("deepseek-chat", "hi", 200);
         request.Stream = true;
 
-        String? model = null;
+        String model = null;
         await foreach (var chunk in ChatStreamAsync(request))
         {
             if (chunk.Model != null)
@@ -1124,6 +1124,25 @@ public class DeepSeekIntegrationTests
         Assert.NotNull(models);
         Assert.NotEmpty(models);
         Assert.Contains(models, m => m.Model.Contains("deepseek", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    [DisplayName("注册表_DeepSeek视觉模型能力正确")]
+    public void Registry_DeepSeekVisionModel_Capabilities()
+    {
+        // deepseek-v4-flash-vision-exp：支持视觉输入（图片识别），不支持文生图
+        var descriptor = AiClientRegistry.Default.GetDescriptor("DeepSeek");
+        Assert.NotNull(descriptor);
+        var caps = descriptor!.FindModelCapabilities("deepseek-v4-flash-vision-exp");
+        Assert.NotNull(caps);
+        Assert.True(caps!.SupportVision);
+        Assert.False(caps.SupportImage);
+        Assert.True(caps.SupportThinking);
+        Assert.True(caps.SupportFunction);
+
+        var info = descriptor.FindModelInfo("deepseek-v4-flash-vision-exp");
+        Assert.NotNull(info);
+        Assert.Equal("DeepSeek V4 Flash Vision", info!.DisplayName);
     }
 
     [Fact]

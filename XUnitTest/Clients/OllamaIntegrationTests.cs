@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using NewLife.AI.Clients;
 using NewLife.AI.Clients.Ollama;
-using NewLife.AI.Models;
 using NewLife.Remoting;
 using NewLife.Serialization;
 using Xunit;
@@ -53,6 +52,56 @@ public class OllamaIntegrationTests
             chunks.Add(delta);
         }
         return chunks;
+    }
+
+    private static async Task<(String Content, String Thinking, Int32 ChunkCount, Boolean ReachedThreshold)> CollectStreamUntilEnoughAsync(
+        OllamaChatClient client, ChatRequest request, Int32 minTextLength = 48, CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        var contentParts = new List<String>();
+        var thinkingParts = new List<String>();
+        var contentLength = 0;
+        var thinkingLength = 0;
+        var chunkCount = 0;
+        var reachedThreshold = false;
+
+        try
+        {
+            await foreach (var chunk in client.GetStreamingResponseAsync(request, cts.Token))
+            {
+                chunkCount++;
+
+                foreach (var message in chunk.Messages ?? [])
+                {
+                    var content = message.Delta?.Content as String;
+                    if (!String.IsNullOrWhiteSpace(content))
+                    {
+                        contentParts.Add(content);
+                        contentLength += content.Length;
+                    }
+
+                    var thinking = message.Delta?.ReasoningContent;
+                    if (!String.IsNullOrWhiteSpace(thinking))
+                    {
+                        thinkingParts.Add(thinking);
+                        thinkingLength += thinking.Length;
+                    }
+                }
+
+                if (contentLength + thinkingLength >= minTextLength)
+                {
+                    reachedThreshold = true;
+                    cts.Cancel();
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // 达到阈值后主动结束流式读取，缩短重量模型测试耗时
+        }
+
+        return (String.Concat(contentParts), String.Concat(thinkingParts), chunkCount, reachedThreshold);
     }
 
     #endregion
@@ -294,11 +343,11 @@ public class OllamaIntegrationTests
         // Temperature = 0（确定性输出），验证有正常响应
         var req = SimpleRequest("say hi", 50);
         req.Temperature = 0.0;
-        var resp = await client.GetResponseAsync(req);
+        var resp = await client.GetResponseAsync(req, cancellationToken: default);
         Assert.NotEmpty(resp?.Messages?[0].Message?.Content as String);
 
         // MaxTokens 极小值（验证截断，FinishReason 应为 length）
-        resp = await client.GetResponseAsync(SimpleRequest("write a long story about a robot", 5));
+        resp = await client.GetResponseAsync(SimpleRequest("write a long story about a robot", 5), cancellationToken: default);
         Assert.NotNull(resp?.Messages);
         Assert.True(
             resp.Messages[0].FinishReason == FinishReason.Length ||
@@ -308,7 +357,7 @@ public class OllamaIntegrationTests
         // Stop 停止词（验证请求被截断后仍能正常返回）
         req = SimpleRequest("count from 1 to 10, comma separated", 200);
         req.Stop = ["5"];
-        resp = await client.GetResponseAsync(req);
+        resp = await client.GetResponseAsync(req, cancellationToken: default);
         Assert.NotNull(resp?.Messages);
         Assert.True(
             resp.Messages[0].FinishReason == FinishReason.Stop ||
@@ -706,7 +755,7 @@ public class OllamaIntegrationTests
     public async Task Options_TrailingSlash_Handled()
     {
         using var client = new OllamaChatClient(null, LightModel, "http://localhost:11434/");
-        var response = await client.GetResponseAsync(SimpleRequest("hi", 50));
+        var response = await client.GetResponseAsync(SimpleRequest("hi", 50), cancellationToken: default);
         Assert.NotNull(response?.Messages);
     }
 
@@ -718,19 +767,26 @@ public class OllamaIntegrationTests
     [DisplayName("稳定性_多请求并发发送")]
     public async Task ChatAsync_Concurrent_AllSucceed()
     {
-        var tasks = Enumerable.Range(1, 3).Select(i =>
+        // 注意：不能在 lambda 内 using 释放 client（A-59 后 Dispose 会真正释放 HttpClient），
+        // 否则 GetResponseAsync 返回的异步任务仍在执行时连接已被关闭
+        var clients = Enumerable.Range(1, 3).Select(_ => CreateClient()).ToArray();
+        try
         {
-            using var client = CreateClient();
-            return client.GetResponseAsync(SimpleRequest($"{i}+{i}=? reply with only the number", 50));
-        }).ToArray();
+            var tasks = clients.Select((client, i) =>
+                client.GetResponseAsync(SimpleRequest($"{i + 1}+{i + 1}=? reply with only the number", 50))).ToArray();
 
-        var responses = await Task.WhenAll(tasks);
+            var responses = await Task.WhenAll(tasks);
 
-        foreach (var response in responses)
+            foreach (var response in responses)
+            {
+                Assert.NotNull(response);
+                Assert.NotNull(response.Messages);
+                Assert.NotEmpty(response.Messages);
+            }
+        }
+        finally
         {
-            Assert.NotNull(response);
-            Assert.NotNull(response.Messages);
-            Assert.NotEmpty(response.Messages);
+            foreach (var client in clients) client.Dispose();
         }
     }
 
@@ -761,7 +817,7 @@ public class OllamaIntegrationTests
     #region 重量模型测试
 
     [OllamaHeavyFact]
-    [DisplayName("重量模型_诗歌+思考_正文或思考至少其一非空")]
+    [DisplayName("重量模型_诗歌+思考_流式达到阈值即可提前结束")]
     public async Task HeavyModel_ChatAsync_ThinkTrue_PoemContentNonEmpty()
     {
         using var client = CreateClientFor(HeavyModel);
@@ -771,23 +827,18 @@ public class OllamaIntegrationTests
             Messages = [new ChatMessage { Role = "user", Content = "Write a short poem about the moon." }],
             MaxTokens = 500,
             EnableThinking = true,
+            Stream = true,
         };
 
-        var response = await client.GetResponseAsync(request);
+        var result = await CollectStreamUntilEnoughAsync(client, request);
 
-        Assert.NotNull(response?.Messages);
-        var msg = response.Messages[0].Message;
-        Assert.NotNull(msg);
-
-        var content = msg.Content as String;
-        var thinking = msg.ReasoningContent;
-
-        Assert.True(!String.IsNullOrWhiteSpace(content) || !String.IsNullOrWhiteSpace(thinking),
+        Assert.True(result.ChunkCount > 0, "重量模型流式模式至少应返回一个 chunk");
+        Assert.True(!String.IsNullOrWhiteSpace(result.Content) || !String.IsNullOrWhiteSpace(result.Thinking),
             "重量模型在 think=true 时至少应返回正文或思考内容之一");
     }
 
     [OllamaHeavyFact]
-    [DisplayName("重量模型_流式流式思考_正文拼合后非空")]
+    [DisplayName("重量模型_流式思考_达到阈值后主动结束")]
     public async Task HeavyModel_ChatStreamAsync_ThinkTrue_ContentNonEmpty()
     {
         using var client = CreateClientFor(HeavyModel);
@@ -800,19 +851,14 @@ public class OllamaIntegrationTests
             Stream = true,
         };
 
-        var chunks = await CollectStreamAsync(client, request);
-        Assert.NotEmpty(chunks);
-
-        var allContent = String.Concat(chunks
-            .SelectMany(c => c.Messages ?? [])
-            .Select(ch => ch.Delta?.Content as String ?? ""));
-        var allThinking = String.Concat(chunks
-            .SelectMany(c => c.Messages ?? [])
-            .Select(ch => ch.Delta?.ReasoningContent ?? ""));
+        var result = await CollectStreamUntilEnoughAsync(client, request);
 
         // 不同 Ollama/模型版本在 think=true 时可能仅输出 reasoning 或 content，接受任一非空即可
-        Assert.True(!String.IsNullOrWhiteSpace(allContent) || !String.IsNullOrWhiteSpace(allThinking),
+        Assert.True(result.ChunkCount > 0, "重量模型流式模式至少应返回一个 chunk");
+        Assert.True(!String.IsNullOrWhiteSpace(result.Content) || !String.IsNullOrWhiteSpace(result.Thinking),
             "流式返回至少应包含正文或思考内容之一");
+        Assert.True(result.ReachedThreshold || result.Content.Length + result.Thinking.Length > 0,
+            "应在达到阈值后提前结束，或至少收到部分正文/思考内容");
     }
 
     [OllamaHeavyFact]

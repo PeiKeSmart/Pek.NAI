@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using System;
 using System.ComponentModel;
 using System.IO;
@@ -79,7 +79,7 @@ public class DashScopeImageEditTests
             Model = "qwen-image-2.0",
             Prompt = "修改背景颜色",
             ImageUrl = "https://example.com/input.png",
-            Size = "1024x1024",
+            Size = "1024*1024",
         });
 
         Assert.NotNull(response);

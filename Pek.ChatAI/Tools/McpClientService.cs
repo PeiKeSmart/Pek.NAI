@@ -9,8 +9,17 @@ namespace NewLife.ChatAI.Tools;
 /// <summary>MCP 客户端服务。连接远程 MCP Server，发现工具并执行工具调用。实现 <see cref="IToolProvider"/> 以供 <c>ToolChatClient</c> 直接集成</summary>
 /// <remarks>实例化 MCP 客户端服务</remarks>
 /// <param name="log">日志</param>
-public class McpClientService(ILog log) : IToolProvider
+/// <param name="httpClientFactory">HTTP 客户端工厂。提供命名客户端，handler 生命周期由工厂管理</param>
+/// <param name="chatSetting">AI 对话配置（读取 EnableMcp / EnableFunctionCalling 控制工具可见性）</param>
+public class McpClientService(ILog log, IHttpClientFactory httpClientFactory, IChatSetting chatSetting) : IToolProvider
 {
+    #region 缓存
+    private IList<McpToolInfo>? _allToolsCache;
+    private Int64 _allToolsCacheExpiry;
+    /// <summary>GetAllTools 结果缓存 TTL（毫秒）。McpServerConfig 实体缓存兜底，此处再缓存反序列化后的 McpToolInfo 列表</summary>
+    private const Int64 AllToolsCacheTtlMs = 30_000;
+    #endregion
+
     #region 工具发现
     /// <summary>发现指定 MCP Server 的可用工具列表，并更新到数据库</summary>
     /// <param name="serverId">MCP 服务配置编号</param>
@@ -49,9 +58,21 @@ public class McpClientService(ILog log) : IToolProvider
         return tools;
     }
 
-    /// <summary>获取所有已启用 MCP Server 的工具列表</summary>
+    /// <summary>获取所有已启用 MCP Server 的工具列表（带 30 s 缓存）</summary>
     /// <returns>工具列表，包含服务名称</returns>
     public IList<McpToolInfo> GetAllTools()
+    {
+        var now = Runtime.TickCount64;
+        if (_allToolsCache != null && now < _allToolsCacheExpiry) return _allToolsCache;
+
+        var list = BuildAllTools();
+        _allToolsCache = list;
+        _allToolsCacheExpiry = now + AllToolsCacheTtlMs;
+        return list;
+    }
+
+    /// <summary>遍历已启用 MCP Server，反序列化工具清单，构建 <see cref="McpToolInfo"/> 列表</summary>
+    private List<McpToolInfo> BuildAllTools()
     {
         var list = new List<McpToolInfo>();
         var servers = McpServerConfig.FindAllWithCache();
@@ -64,8 +85,13 @@ public class McpClientService(ILog log) : IToolProvider
             var tools = server.AvailableTools.ToJsonEntity<IList<ToolDefinition>>();
             if (tools == null) continue;
 
+            // 解析禁用工具列表（逗号分隔，支持 * 通配）
+            var disabled = ParseDisabledPatterns(server.DisabledTools);
+
             foreach (var tool in tools)
             {
+                if (IsToolDisabled(tool.Name, disabled)) continue;
+
                 list.Add(new McpToolInfo
                 {
                     ServerId = server.Id,
@@ -80,23 +106,50 @@ public class McpClientService(ILog log) : IToolProvider
         return list;
     }
 
-    /// <summary>实现 <see cref="IToolProvider.GetTools"/>。将已启用 MCP 工具转换为 <see cref="ChatTool"/> 列表</summary>
-    /// <returns>工具定义列表，供注入 ChatCompletionRequest.Tools</returns>
-    public IList<ChatTool> GetTools()
+    /// <summary>解析禁用工具字符串为匹配模式列表。逗号分隔，每项支持 * 前缀通配</summary>
+    /// <param name="disabledTools">逗号分隔的禁用工具名列表，如 "dangerous_tool,search_*"</param>
+    /// <returns>禁用匹配模式列表；空数组表示无禁用</returns>
+    private static String[] ParseDisabledPatterns(String? disabledTools)
     {
-        return GetFilteredTools(null);
+        if (disabledTools.IsNullOrWhiteSpace()) return [];
+
+        return disabledTools
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => p.Length > 0)
+            .ToArray();
     }
 
-    /// <summary>按工具名集合过滤 MCP 工具定义。用于会话级作用域控制</summary>
-    /// <param name="selectedTools">已选工具集合。null 表示不过滤，返回全部已启用 MCP 工具</param>
-    /// <returns>工具定义列表</returns>
-    public IList<ChatTool> GetFilteredTools(ISet<String>? selectedTools)
+    /// <summary>判断工具名是否匹配禁用列表。支持 * 和 ? 通配符匹配</summary>
+    /// <param name="toolName">工具名</param>
+    /// <param name="patterns">禁用匹配模式列表</param>
+    /// <returns>true 表示该工具应被禁用</returns>
+    private static Boolean IsToolDisabled(String toolName, String[] patterns)
     {
+        if (patterns.Length == 0) return false;
+
+        foreach (var pattern in patterns)
+        {
+            if (pattern.IsMatch(toolName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>实现 <see cref="IToolProvider.GetTools(ISet{String}?)"/>。将已启用 MCP 工具转换为 <see cref="ChatTool"/> 列表</summary>
+    /// <param name="filterNames">工具可见性过滤集合；null 返回全部已启用 MCP 工具；非 null 时因 MCP 无系统工具概念，
+    /// 按契约退化为仅返回 filterNames 匹配工具（空集合返回空）</param>
+    /// <returns>工具定义列表，供注入 ChatCompletionRequest.Tools</returns>
+    public IList<ChatTool> GetTools(ISet<String>? filterNames = null)
+    {
+        // 未启用 MCP 或函数调用时，不暴露任何 MCP 工具（在访问 DB 前短路）
+        if (!chatSetting.EnableMcp || !chatSetting.EnableFunctionCalling) return [];
+
         var mcpTools = GetAllTools();
         var tools = new List<ChatTool>(mcpTools.Count);
         foreach (var t in mcpTools)
         {
-            if (selectedTools != null && !selectedTools.Contains(t.Name)) continue;
+            if (filterNames != null && !filterNames.Contains(t.Name)) continue;
 
             tools.Add(new ChatTool
             {
@@ -118,6 +171,9 @@ public class McpClientService(ILog log) : IToolProvider
     public ISet<String> MatchToolNamesByContent(String? content)
     {
         var result = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
+
+        // 未启用 MCP 时不做触发词匹配（在访问 DB 前短路）
+        if (!chatSetting.EnableMcp) return result;
 
         var servers = McpServerConfig.FindAllWithCache();
         foreach (var server in servers)
@@ -179,25 +235,26 @@ public class McpClientService(ILog log) : IToolProvider
 
     /// <summary>实现 <see cref="IToolProvider.CallToolAsync"/>。按工具名在已启用服务中查找并调用</summary>
     /// <param name="toolName">工具名称</param>
-    /// <param name="argumentsJson">参数 JSON 字符串</param>
+    /// <param name="arguments">参数 JSON 字符串</param>
+    /// <param name="context">调用上下文，可为 null</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>调用结果文本；工具未找到时抛 <see cref="KeyNotFoundException"/></returns>
-    async Task<String> IToolProvider.CallToolAsync(String toolName, String? argumentsJson, CancellationToken cancellationToken)
+    async Task<IToolResult> IToolProvider.CallToolAsync(String toolName, String? arguments, ToolCallContext? context, CancellationToken cancellationToken)
     {
         var allTools = GetAllTools();
         var tool = allTools.FirstOrDefault(t => t.Name.EqualIgnoreCase(toolName));
         if (tool == null) throw new KeyNotFoundException($"MCP tool not found: '{toolName}'");
 
         var args = new Dictionary<String, Object?>();
-        if (!argumentsJson.IsNullOrEmpty())
+        if (!arguments.IsNullOrEmpty())
         {
-            var parsed = argumentsJson.ToJsonEntity<Dictionary<String, Object?>>();
+            var parsed = arguments.ToJsonEntity<Dictionary<String, Object?>>();
             if (parsed != null) args = parsed;
         }
         var result = await CallToolAsync(tool.ServerId, toolName, args, cancellationToken).ConfigureAwait(false);
 
-        if (result.Content == null || result.Content.Count == 0) return String.Empty;
-        return String.Join("\n", result.Content.Select(c => c.Text));
+        if (result.Content == null || result.Content.Count == 0) return new ToolResult(String.Empty);
+        return new ToolResult(String.Join("\n", result.Content.Select(c => c.Text)));
     }
     #endregion
 
@@ -220,7 +277,9 @@ public class McpClientService(ILog log) : IToolProvider
     private async Task<JsonRpcResponse> SendRequestAsync(McpServerConfig config, JsonRpcRequest request, CancellationToken cancellationToken)
     {
         //var client = httpClientFactory.CreateClient("McpClient");
-        var client = new HttpClient();
+        // 使用 IHttpClientFactory 命名客户端：handler 由工厂管理（默认 2 分钟轮换），连接复用且自动刷新，避免 DNS 变更 / 连接陈旧；
+        // 工厂创建的 HttpClient 是轻量包装，其共享 handler 生命周期由工厂管理，无需释放
+        var client = httpClientFactory.CreateClient("McpClient");
         client.Timeout = TimeSpan.FromSeconds(30);
 
         // 设置认证
@@ -232,7 +291,9 @@ public class McpClientService(ILog log) : IToolProvider
                 client.DefaultRequestHeaders.Add("X-Api-Key", config.AuthToken);
         }
 
-        var json = request.ToJson();
+        // 请求序列化：ToJson(indented, nullValue, camelCase)。nullValue 必须为 true 保留空值，
+        // 否则空字符串参数（如 query=""）会被 JsonWriter.IsNull 判定为空值省略，导致工具必填参数丢失
+        var json = request.ToJson(false, true, true);
         using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         using var httpResponse = await client.PostAsync(config.Endpoint, content, cancellationToken).ConfigureAwait(false);
 

@@ -138,6 +138,47 @@ public class BedrockChatClientTests
         Assert.Contains("eu-west-1", url);
     }
 
+    [Fact]
+    [DisplayName("Region_自定义端点未设Protocol_从端点推导区域")]
+    public void Region_CustomEndpoint_WithoutProtocol_DerivedFromEndpoint()
+    {
+        var client = new BedrockChatClient(new AiClientOptions
+        {
+            ApiKey = "AKID",
+            Organization = "SECRET",
+            Endpoint = "https://bedrock-runtime.eu-west-1.amazonaws.com",
+        });
+
+        Assert.Equal("eu-west-1", client.Region);
+    }
+
+    [Fact]
+    [DisplayName("BuildUrl_自定义端点_直接使用且签名区域一致")]
+    public void BuildUrl_CustomEndpoint_UsesIt_AndRegionMatches()
+    {
+        var client = new BedrockChatClient(new AiClientOptions
+        {
+            ApiKey = "AKID",
+            Organization = "SECRET",
+            Endpoint = "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+            Model = "test-model",
+        });
+        var request = new ChatRequest
+        {
+            Messages = [new ChatMessage { Role = "user", Content = "hello" }],
+            Model = "test-model",
+        };
+
+        var method = typeof(BedrockChatClient).GetMethod("BuildUrl",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var url = method!.Invoke(client, [request]) as String;
+
+        Assert.NotNull(url);
+        Assert.StartsWith("https://bedrock-runtime.ap-northeast-1.amazonaws.com/model/test-model/converse", url);
+        // 签名区域与端点区域一致，避免 SigV4 签名不匹配 403
+        Assert.Equal("ap-northeast-1", client.Region);
+    }
+
     #endregion
 
     #region BuildRequest 单元测试
@@ -170,6 +211,58 @@ public class BedrockChatClientTests
 
         // messages 不应包含 system 角色
         Assert.Single(body.Messages); // 仅 user 消息
+    }
+
+    [Fact]
+    [DisplayName("BuildRequest_图片消息_转换为image内容块")]
+    public void BuildRequest_ImageContent_BuildsImageBlock()
+    {
+        var client = new BedrockChatClient("AKID", "SECRET", "test-model", "us-east-1");
+        var request = new ChatRequest { Model = "test-model" };
+        var msg = new ChatMessage { Role = "user" };
+        msg.Contents =
+        [
+            new TextContent("描述图片"),
+            new ImageContent { Data = [1, 2, 3], MediaType = "image/png" },
+        ];
+        request.Messages.Add(msg);
+
+        var method = typeof(BedrockChatClient).GetMethod("BuildRequest",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var body = method!.Invoke(client, [request]) as BedrockRequest;
+
+        Assert.NotNull(body);
+        var blocks = body!.Messages![0].Content!;
+        Assert.Equal(2, blocks.Count);
+        Assert.Equal("描述图片", blocks[0].Text);
+        Assert.NotNull(blocks[1].Image);
+        Assert.Equal("png", blocks[1].Image!.Format);
+        Assert.Equal(Convert.ToBase64String([1, 2, 3]), blocks[1].Image.Source!.Bytes);
+    }
+
+    [Fact]
+    [DisplayName("BuildRequest_TopK/惩罚参数_映射到inferenceConfig")]
+    public void BuildRequest_TopKAndPenalties_MapsToInferenceConfig()
+    {
+        var client = new BedrockChatClient("AKID", "SECRET", "test-model", "us-east-1");
+        var request = new ChatRequest
+        {
+            Messages = [new ChatMessage { Role = "user", Content = "hello" }],
+            Model = "test-model",
+            TopK = 40,
+            PresencePenalty = 0.5,
+            FrequencyPenalty = 0.3,
+        };
+
+        var method = typeof(BedrockChatClient).GetMethod("BuildRequest",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var body = method!.Invoke(client, [request]) as BedrockRequest;
+
+        Assert.NotNull(body);
+        Assert.NotNull(body.InferenceConfig);
+        Assert.Equal(40, body.InferenceConfig!.TopK);
+        Assert.Equal(0.5, body.InferenceConfig.PresencePenalty);
+        Assert.Equal(0.3, body.InferenceConfig.FrequencyPenalty);
     }
 
     [Fact]
