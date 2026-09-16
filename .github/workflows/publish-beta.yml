@@ -49,4 +49,7 @@ jobs:
       run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out Pek.ChatAI/Pek.ChatAI.csproj
 
     - name: Publish
-      run: dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}
+      run: |
+        #dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://nuget.pkg.github.com/PeiKeSmart/index.json --api-key ${{ github.token }}
+        dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}
+        dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://nuget.chuangchu.net/v3/index.json --api-key ${{ secrets.mynugetKey }}
