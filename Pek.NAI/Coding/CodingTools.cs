@@ -105,7 +105,7 @@ public class CodingTools(String? workspacePath = null)
         if (fullPath == null)
         {
             // 工作区外路径，尝试审批
-            var approved = await TryApproveAsync("write_file", path);
+            var approved = await TryApproveAsync("write_file", path).ConfigureAwait(false);
             if (!approved) return "Error: 路径超出工作区范围，审批未通过";
             fullPath = Path.GetFullPath(path);
         }
@@ -387,7 +387,7 @@ public class CodingTools(String? workspacePath = null)
         var workingDir = String.IsNullOrEmpty(workDir) ? WorkspacePath : ResolvePath(workDir);
         if (workingDir == null)
         {
-            var approved = await TryApproveAsync("run_command", $"{command} (workDir: {workDir})");
+            var approved = await TryApproveAsync("run_command", $"{command} (workDir: {workDir})").ConfigureAwait(false);
             if (!approved) return "Error: 工作目录超出工作区范围，审批未通过";
             workingDir = String.IsNullOrEmpty(workDir) ? Environment.CurrentDirectory : Path.GetFullPath(workDir);
         }
@@ -658,7 +658,7 @@ public class CodingTools(String? workspacePath = null)
             var result = await ApprovalProvider.RequestApprovalAsync(
                 toolName,
                 $"工作区外操作: {details}",
-                CancellationToken.None);
+                CancellationToken.None).ConfigureAwait(false);
             return result.Approved;
         }
         catch

@@ -55,8 +55,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="DH.NCore" Version="4.22.2026.506-beta0855" />
-    <PackageReference Include="DH.NRemoting" Version="4.21.2026.516-beta0624" />
+    <PackageReference Include="DH.NCore" Version="4.25.2026.911-beta0202" />
+    <PackageReference Include="DH.NRemoting" Version="4.25.2026.906-beta0855" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -65,6 +65,10 @@
 
   <ItemGroup>
     <Content Include="..\Doc\DH.png" Link="DH.png" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\CosyVoiceVoices.json" LogicalName="NewLife.AI.Resources.CosyVoiceVoices.json" />
+    <EmbeddedResource Include="Resources\QwenTtsVoices.json" LogicalName="NewLife.AI.Resources.QwenTtsVoices.json" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\Readme.MD">

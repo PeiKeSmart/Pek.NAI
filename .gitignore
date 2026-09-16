@@ -23,3 +23,17 @@ bld/
 *.nupkg
 /BinTest
 /BinUnitTest
+
+# Frontend
+node_modules/
+Web/dist/
+.pids
+/Pek.ChatAI/wwwroot
+
+# 测试与基准产物
+TestResults
+/Benchmark/BenchmarkDotNet.Artifacts/
+/Benchmark/bench_output*.txt
+/Benchmark/bench_*.txt
+
+.idea/

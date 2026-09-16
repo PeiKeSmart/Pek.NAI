@@ -133,7 +133,7 @@ public class CodingAgent
 
             // Phase 1: 规划
             EmitPhase("规划", "开始分析需求并拆解任务……");
-            var plan = await PlanAsync(requirement, cancellationToken);
+            var plan = await PlanAsync(requirement, cancellationToken).ConfigureAwait(false);
             report.Plan = plan;
 
             if (plan.Tasks.Count > 0)
@@ -156,7 +156,7 @@ public class CodingAgent
             // Phase 2-3: 逐任务执行 实现→审查
             foreach (var task in plan.Tasks)
             {
-                report.TaskResults.Add(await ExecuteTaskAsync(task, cancellationToken));
+                report.TaskResults.Add(await ExecuteTaskAsync(task, cancellationToken).ConfigureAwait(false));
             }
 
             EmitPhase("Done", "自主编码管道执行完成");
@@ -192,7 +192,7 @@ public class CodingAgent
                 EnableThinking = false,
                 ResponseFormat = new { type = "json_object" },
             };
-            var response = await toolClient.GetResponseAsync(messages, options, cancellationToken);
+            var response = await toolClient.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             var plan = ParsePlanFromResponse(response?.Text);
 
             // 补充影响文件分析
@@ -207,12 +207,12 @@ public class CodingAgent
 
             // 工具规划未产出任务，尝试无工具纯文本降级
             WriteLog("工具模式未产出任务，尝试纯文本规划……");
-            return await PlanFallbackAsync(requirement, cancellationToken);
+            return await PlanFallbackAsync(requirement, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             WriteLog("规划阶段异常，尝试降级: {0}", ex.Message);
-            return await PlanFallbackAsync(requirement, cancellationToken);
+            return await PlanFallbackAsync(requirement, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -256,7 +256,7 @@ public class CodingAgent
                 EnableThinking = false,
                 ResponseFormat = new { type = "json_object" },
             };
-            var response = await BaseClient.GetResponseAsync(messages, options, cancellationToken);
+            var response = await BaseClient.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             return ParsePlanFromResponse(response?.Text);
         }
         catch (Exception ex)
@@ -302,7 +302,7 @@ public class CodingAgent
                 }
 
                 var response = toolClient.StreamChatAsync(messages, cancellationToken: cancellationToken);
-                var text = await ReadStreamResponseAsync(response);
+                var text = await ReadStreamResponseAsync(response).ConfigureAwait(false);
                 return text ?? "实现完成（无详细输出）";
             }
             catch (Exception ex)
@@ -342,7 +342,7 @@ public class CodingAgent
                 EnableThinking = false,
                 ResponseFormat = new { type = "json_object" },
             };
-            var response = await toolClient.GetResponseAsync(messages, options, cancellationToken);
+            var response = await toolClient.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             return ParseReviewFromResponse(response?.Text) ?? new ReviewResult
             {
                 Passed = true,
@@ -384,7 +384,7 @@ public class CodingAgent
 
         try
         {
-            var response = await toolClient.GetResponseAsync((IList<ChatMessage>)messages, null, cancellationToken);
+            var response = await toolClient.GetResponseAsync((IList<ChatMessage>)messages, null, cancellationToken).ConfigureAwait(false);
             return response?.Text ?? "修复完成";
         }
         catch (Exception ex)
@@ -439,7 +439,7 @@ public class CodingAgent
             EmitPhase("实现", $"执行任务: [{task.Id}] {task.Description}{(isAnalysis ? " (分析)" : "")}");
 
             // Implement
-            var code = await ImplementAsync(task, cancellationToken);
+            var code = await ImplementAsync(task, cancellationToken).ConfigureAwait(false);
             taskResult.Code = code;
 
             // Analysis 任务：跳过编译修复和审查修复闭环，直接标记完成
@@ -459,15 +459,15 @@ public class CodingAgent
 
             // Modification 任务：走审查-修复闭环
             EmitPhase("审查", $"审查任务: [{task.Id}] {task.Description}");
-            var review = await ReviewAsync(code, task, cancellationToken);
+            var review = await ReviewAsync(code, task, cancellationToken).ConfigureAwait(false);
 
             var reviewRetries = 0;
             while (!review.Passed && reviewRetries < MaxReviewRetries)
             {
                 reviewRetries++;
                 WriteLog("审查不通过，第 {0} 次修复……", reviewRetries);
-                code = await FixAsync(code, review.Issues, task, cancellationToken);
-                review = await ReviewAsync(code, task, cancellationToken);
+                code = await FixAsync(code, review.Issues, task, cancellationToken).ConfigureAwait(false);
+                review = await ReviewAsync(code, task, cancellationToken).ConfigureAwait(false);
             }
 
             taskResult.Review = review;
@@ -806,7 +806,7 @@ public class CodingAgent
     private static async Task<String?> ReadStreamResponseAsync(IAsyncEnumerable<IChatResponse> stream)
     {
         var sb = new StringBuilder();
-        await foreach (var chunk in stream)
+        await foreach (var chunk in stream.ConfigureAwait(false))
         {
             var delta = chunk.Messages?.FirstOrDefault()?.Delta;
             if (delta?.Content is String text && !String.IsNullOrEmpty(text))

@@ -21,8 +21,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <SignAssembly>True</SignAssembly>
-    <AssemblyOriginatorKeyFile>..\Doc\newlife.snk</AssemblyOriginatorKeyFile>
     <NoWarn>1701;1702;NU5104;NETSDK1138;CS7035;NETSDK1022</NoWarn>
     <!--<EnableDefaultContentItems>false</EnableDefaultContentItems>-->
   </PropertyGroup>
@@ -57,6 +55,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="wwwroot\**\*" />
+    <EmbeddedResource Include="Resources\china-map.svg" />
   </ItemGroup>
 
   <!-- wwwroot 已嵌入 DLL，移除 NuGet 包中的 staticwebassets/ 目录
@@ -78,10 +77,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="NewLife.Cube.Core" Version="6.11.2026.514-beta0237" />
-    <PackageReference Include="NewLife.Holiday" Version="1.4.2026.302-beta0609" />
-    <PackageReference Include="NewLife.MySql" Version="1.1.2026.509-beta0405" />
-    <PackageReference Include="NewLife.XCode" Version="11.26.2026.513-beta1143" />
+    <PackageReference Include="DH.NCube.Core" Version="4.22.2026.516-beta1022" />
+    <PackageReference Include="DH.NHoliday" Version="4.25.2026.916-beta0109" />
+    <PackageReference Include="DH.NCode" Version="4.25.2026.914-beta0303" />
+    <PackageReference Include="DH.MySql" Version="4.25.2026.914-beta0342" />
+    <PackageReference Include="DH.NStardust.Extensions" Version="4.25.2026.914-beta0858" />
+    <PackageReference Include="Pek.Office" Version="4.25.2026.915-beta0314" />
   </ItemGroup>
 
   <ItemGroup>
