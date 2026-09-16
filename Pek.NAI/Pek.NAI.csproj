@@ -57,7 +57,7 @@
   <ItemGroup>
     <PackageReference Include="DH.NCore" Version="4.25.2026.911-beta0202" />
     <PackageReference Include="DH.NRemoting" Version="4.25.2026.906-beta0855" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.300">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.401">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
