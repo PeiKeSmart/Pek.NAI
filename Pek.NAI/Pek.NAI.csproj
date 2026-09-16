@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
+    <TargetFrameworks>netstandard2.1;net11.0</TargetFrameworks>
     <OutputType>Library</OutputType>
     <RootNamespace>Pek.NAI</RootNamespace>
     <AssemblyTitle>统一 AI 网关基础库</AssemblyTitle>

@@ -2,7 +2,7 @@
 
 [![NuGet](https://img.shields.io/nuget/v/Pek.NAI.svg?style=flat-square)](https://www.nuget.org/packages/Pek.NAI/)
 [![NuGet Download](https://img.shields.io/nuget/dt/Pek.NAI.svg?style=flat-square)](https://www.nuget.org/packages/Pek.NAI/)
-[![.NET](https://img.shields.io/badge/.NET-Standard2.1%2Bnet8%2Bnet10-purple?style=flat-square)](https://dotnet.microsoft.com)
+[![.NET](https://img.shields.io/badge/.NET-Standard2.1%2Bnet8%2Bnet10%2Bnet11-purple?style=flat-square)](https://dotnet.microsoft.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
 **NewLife.AI** 是统一 AI 网关基础库，支持 48 个主流 AI 服务商的接入与编排。
@@ -274,7 +274,7 @@ await foreach (var msg in groupChat.RunAsync(new TextMessage { Content = "分析
 
 ```text
 Pek.NAI.slnx
-├── Pek.NAI/               # 核心基础库（netstandard2.1）
+├── Pek.NAI/               # 核心基础库（netstandard2.1/net11.0）
 │   ├── Clients/              # IChatClient 实现（OpenAI/Anthropic/Gemini 等）
 │   ├── Providers/            # AiClientRegistry + ChatClientBuilder
 │   ├── Filters/              # IChatFilter 过滤器体系
@@ -284,10 +284,10 @@ Pek.NAI.slnx
 │   ├── Memory/               # ISemanticMemory + IVectorStore
 │   └── ModelContextProtocol/ # MCP 协议实现
 │
-├── Pek.AI.Extensions/    # ASP.NET Core 扩展（net6/8/10）
+├── Pek.AI.Extensions/    # ASP.NET Core 扩展（net8/10/11）
 │   └── AspNetMcpServer.cs   # 将 ASP.NET 应用扩展为 MCP Server
 │
-├── Pek.ChatAI/           # 完整 Web 应用（net8/10）
+├── Pek.ChatAI/           # 完整 Web 应用（net8/10/11）
 │   ├── Controllers/          # 16 个 API 控制器
 │   ├── Services/             # 业务服务层
 │   ├── Entity/               # XCode 实体类（8 张表）

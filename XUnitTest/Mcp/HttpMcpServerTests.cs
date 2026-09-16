@@ -196,7 +196,8 @@ public class HttpMcpServerTests : IDisposable
     {
         // Arrange
         var server = new HttpMcpServer();
-        var originalServer = new HttpServer();
+        // 端口 0 由系统分配，避免多目标框架测试宿主并行运行时争用 HttpServer 默认端口 80
+        var originalServer = new HttpServer { Port = 0 };
         server.Server = originalServer;
 
         // Act

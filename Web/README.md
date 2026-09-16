@@ -121,7 +121,7 @@ VITE_API_BASE_URL=http://your-backend:5080 pnpm dev
 
 ## 相关项目
 
-- [Pek.NAI](https://github.com/PeiKeSmart/Pek.NAI) — 基础库，多协议模型适配（netstandard2.1）
+- [Pek.NAI](https://github.com/PeiKeSmart/Pek.NAI) — 基础库，多协议模型适配（netstandard2.1/net11.0）
 - [Pek.ChatAI](../Pek.ChatAI/) — 后端应用层，ASP.NET Core + XCode ORM
 
 ## 许可证
