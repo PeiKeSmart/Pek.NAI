@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using NewLife.Serialization;
 using Xunit;
 
 namespace XUnitTest.Helpers;
@@ -27,7 +28,7 @@ public sealed class RequiresApiKeyFactAttribute : FactAttribute
         Skip = $"未检测到可用 API Key（{source}），跳过集成测试";
     }
 
-    private static Boolean HasKey(String environmentVariable, String? filePath, String[] fallbackEnvironmentVariables)
+    internal static Boolean HasKey(String environmentVariable, String? filePath, String[] fallbackEnvironmentVariables)
     {
         if (!String.IsNullOrEmpty(filePath) && TryReadFileKey(filePath!)) return true;
         if (TryReadEnv(environmentVariable)) return true;
@@ -64,7 +65,24 @@ public sealed class RequiresApiKeyFactAttribute : FactAttribute
             path = cwdPath;
         }
 
-        var key = File.ReadAllText(path).Trim();
-        return !String.IsNullOrWhiteSpace(key);
+        var content = File.ReadAllText(path).Trim();
+        if (content.Length == 0) return false;
+
+        // JSON 格式配置（如 DashScope.key）：解析 ApiKey 字段，避免空配置被误判为有效密钥
+        if (content.StartsWith("{"))
+        {
+            try
+            {
+                var cfg = content.ToJsonEntity<DashScopeTestConfig>();
+                return !String.IsNullOrWhiteSpace(cfg?.ApiKey);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // 纯文本：首行非空即视为有效
+        return true;
     }
 }

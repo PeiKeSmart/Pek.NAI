@@ -15,6 +15,7 @@ using NewLife.AI.Models;
 using NewLife.Remoting;
 using Xunit;
 using XUnitTest.Gateway;
+using XUnitTest.Helpers;
 
 namespace XUnitTest.Clients;
 
@@ -140,7 +141,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region 非流式对话 - Chat Completions（/v1/chat/completions）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_Qwen3.5_返回有效响应")]
     public async Task ChatAsync_ReturnsValidResponse()
     {
@@ -158,7 +159,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.True(response.Usage.TotalTokens > 0, "Token 数量应大于 0");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_系统提示词有效")]
     public async Task ChatAsync_SystemPrompt_Respected()
     {
@@ -196,7 +197,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.Contains("reply", content);
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_多轮对话上下文保留")]
     public async Task ChatAsync_MultiTurn_ContextPreserved()
     {
@@ -221,7 +222,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.Contains("小明", content);
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_FinishReason正确返回")]
     public async Task ChatAsync_FinishReason_Returned()
     {
@@ -235,7 +236,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
             $"FinishReason 应为 stop 或 length，实际为: {finishReason}");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_响应包含模型标识")]
     public async Task ChatAsync_Response_ContainsModel()
     {
@@ -246,7 +247,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.False(String.IsNullOrEmpty(response.Model));
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_Temperature参数有效")]
     public async Task ChatAsync_Temperature_Accepted()
     {
@@ -260,7 +261,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.False(String.IsNullOrEmpty(content));
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("非流式_MaxTokens参数有效")]
     public async Task ChatAsync_MaxTokens_LimitsOutput()
     {
@@ -277,7 +278,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region 流式对话 - Chat Completions（/v1/chat/completions）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("流式_返回多个Chunk")]
     public async Task ChatStreamAsync_ReturnsChunks()
     {
@@ -301,7 +302,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.True(hasContent, "流式应包含至少一个有内容的 chunk");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("流式_内容可拼合为完整响应")]
     public async Task ChatStreamAsync_Content_CanBeConcatenated()
     {
@@ -319,7 +320,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.Contains("2", fullContent);
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("流式_取消令牌可以终止")]
     public async Task ChatStreamAsync_Cancellation_StopsEarly()
     {
@@ -345,7 +346,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region OpenAI Responses API（/v1/responses）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("ResponsesAPI_非流式_返回有效响应")]
     public async Task ResponsesAsync_ReturnsValidResponse()
     {
@@ -360,7 +361,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.False(String.IsNullOrEmpty(content));
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("ResponsesAPI_流式_返回多个Chunk")]
     public async Task ResponsesStreamAsync_ReturnsChunks()
     {
@@ -380,7 +381,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region Anthropic Messages API（/v1/messages）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("MessagesAPI_非流式_返回有效响应")]
     public async Task MessagesAsync_ReturnsValidResponse()
     {
@@ -395,7 +396,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.False(String.IsNullOrEmpty(content));
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("MessagesAPI_流式_返回多个Chunk")]
     public async Task MessagesStreamAsync_ReturnsChunks()
     {
@@ -415,7 +416,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region Google Gemini API（/v1/gemini）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GeminiAPI_非流式_返回有效响应")]
     public async Task GeminiAsync_ReturnsValidResponse()
     {
@@ -430,7 +431,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.False(String.IsNullOrEmpty(content));
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GeminiAPI_流式_返回多个Chunk")]
     public async Task GeminiStreamAsync_ReturnsChunks()
     {
@@ -450,7 +451,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region 图像生成（/v1/images/generations）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("图像生成_有效提示词_返回响应")]
     public async Task ImageGenerationsAsync_ReturnsResponse()
     {
@@ -509,7 +510,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
 
     #region 模型列表（/v1/models）
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("模型列表_返回非空列表且包含上下文长度")]
     public async Task ListModelsAsync_ReturnsModelsWithContextLength()
     {
@@ -527,7 +528,7 @@ public class NewLifeAiIntegrationTests : IClassFixture<ChatAIWebAppFactory>
         Assert.True(first.ContextLength >= 0, "ContextLength 不应为负数");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("模型列表_每个模型包含全部6个能力字段")]
     public async Task ListModelsAsync_ReturnsModelsWithAllCapabilityFields()
     {

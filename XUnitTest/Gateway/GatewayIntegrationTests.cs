@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Xunit;
+using XUnitTest.Helpers;
 
 namespace XUnitTest.Gateway;
 
@@ -55,7 +56,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
     #region GET /v1/models
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models 返回模型列表，object=list")]
     public async Task ListModels_Returns_ModelList()
     {
@@ -72,7 +73,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(doc["data"]!.AsArray().Count > 0, "模型列表不应为空");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models 每个模型对象包含上下文长度和6个能力字段")]
     public async Task ListModels_Returns_ContextLength_And_Capabilities()
     {
@@ -97,7 +98,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(first["support_video"] != null, "缺少 support_video 字段");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models 无效密钥返回 401 + INVALID_API_KEY")]
     public async Task ListModels_InvalidKey_Returns_401()
     {
@@ -108,7 +109,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.Equal("INVALID_API_KEY", doc?["code"]?.GetValue<String>());
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models 无认证返回公开模型列表（200 OK）")]
     public async Task ListModels_NoAuth_Returns_PublicModels()
     {
@@ -122,7 +123,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(doc["data"]!.AsArray().Count > 0, "公开模型列表不应为空");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models?key=sk-xxx 通过查询参数认证并返回模型列表")]
     public async Task ListModels_KeyQueryParam_Returns_Models()
     {
@@ -136,7 +137,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(doc["data"]!.AsArray().Count > 0, "通过 key 查询参数应返回模型列表");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models?keyword=xxx 按关键字过滤模型")]
     public async Task ListModels_KeywordFilter_Returns_FilteredModels()
     {
@@ -161,7 +162,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         }
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models?capabilities=vision,function 按能力枚举过滤")]
     public async Task ListModels_CapabilitiesFilter_Returns_ModelsWithAllCapabilities()
     {
@@ -183,7 +184,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         }
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models?support_vision=true OpenAI 风格能力过滤")]
     public async Task ListModels_OpenAIStyleFilter_Returns_VisionModels()
     {
@@ -203,7 +204,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         }
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("GET /v1/models keyword+capabilities 组合过滤")]
     public async Task ListModels_CombinedFilter_KeywordAndCapabilities()
     {
@@ -233,7 +234,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
     #region POST /v1/chat/completions
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 非流式：model/choices/usage 均正确")]
     public async Task ChatCompletions_NonStream_Returns_ValidResponse()
     {
@@ -273,7 +274,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(totalTokens > 0, "total_tokens 应大于 0");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 流式：返回 SSE 格式，包含 data: chunk 和 [DONE]")]
     public async Task ChatCompletions_Stream_Returns_SseChunks()
     {
@@ -360,7 +361,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         }
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 携带 tools 参数正常响应")]
     public async Task ChatCompletions_WithTools_Returns_ValidResponse()
     {
@@ -406,7 +407,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.True(doc["choices"]!.AsArray().Count > 0, "choices 不应为空");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 无效密钥返回 401 + INVALID_API_KEY")]
     public async Task ChatCompletions_InvalidApiKey_Returns_401()
     {
@@ -423,7 +424,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.Equal("INVALID_API_KEY", doc?["code"]?.GetValue<String>());
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 未知模型返回 404 + MODEL_NOT_FOUND，错误消息含模型名")]
     public async Task ChatCompletions_UnknownModel_Returns_404_With_ModelName()
     {
@@ -442,7 +443,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
         Assert.Contains(unknownModel, doc?["message"]?.GetValue<String>() ?? "");
     }
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/chat/completions 请求体格式错误返回 400 + INVALID_REQUEST")]
     public async Task ChatCompletions_MalformedBody_Returns_400()
     {
@@ -458,7 +459,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
     #region POST /v1/responses
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/responses 等价于 /v1/chat/completions，正常返回响应")]
     public async Task Responses_Endpoint_Works_Like_Chat()
     {
@@ -484,7 +485,7 @@ public class GatewayIntegrationTests : IDisposable, IClassFixture<ChatAIWebAppFa
 
     #region POST /v1/messages (Anthropic 兼容)
 
-    [Fact]
+    [RequiresCubeCompatibleFact]
     [DisplayName("POST /v1/messages Anthropic 兼容端点正常响应")]
     public async Task Messages_Anthropic_Endpoint_Works()
     {

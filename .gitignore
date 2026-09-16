@@ -32,6 +32,7 @@ Web/dist/
 
 # 测试与基准产物
 TestResults
+/XUnitTest/config/
 /Benchmark/BenchmarkDotNet.Artifacts/
 /Benchmark/bench_output*.txt
 /Benchmark/bench_*.txt
