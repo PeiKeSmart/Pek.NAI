@@ -9,7 +9,7 @@ function renameHtml(from: string, to: string): Plugin {
   return {
     name: 'rename-html',
     closeBundle() {
-      const outDir = path.resolve(__dirname, '../NewLife.ChatAI/wwwroot')
+      const outDir = path.resolve(__dirname, '../Pek.ChatAI/wwwroot')
       const src = path.join(outDir, from)
       const dst = path.join(outDir, to)
       if (fs.existsSync(src)) fs.renameSync(src, dst)
@@ -22,7 +22,7 @@ function removeKatexLegacyFonts(): Plugin {
   return {
     name: 'remove-katex-legacy-fonts',
     closeBundle() {
-      const assetsDir = path.join(path.resolve(__dirname, '../NewLife.ChatAI/wwwroot'), 'assets')
+      const assetsDir = path.join(path.resolve(__dirname, '../Pek.ChatAI/wwwroot'), 'assets')
       if (!fs.existsSync(assetsDir)) return
       const removed = fs.readdirSync(assetsDir)
         .filter(f => f.startsWith('KaTeX_') && f.endsWith('.ttf'))
@@ -90,7 +90,7 @@ function unwrapCssLayers(): Plugin {
       return { code: unwrapAtLayerBlocks(code), map: null }
     },
     closeBundle() {
-      const outDir = path.resolve(__dirname, '../NewLife.ChatAI/wwwroot')
+      const outDir = path.resolve(__dirname, '../Pek.ChatAI/wwwroot')
       const assetsDir = path.join(outDir, 'assets')
       if (!fs.existsSync(assetsDir)) return
       let files = 0
@@ -130,7 +130,7 @@ export default defineConfig({
     exclude: ['e2e/**', 'node_modules/**'],
   },
   build: {
-    outDir: path.resolve(__dirname, '../NewLife.ChatAI/wwwroot'),
+    outDir: path.resolve(__dirname, '../Pek.ChatAI/wwwroot'),
     emptyOutDir: true,
     sourcemap: false,
     target: 'esnext',

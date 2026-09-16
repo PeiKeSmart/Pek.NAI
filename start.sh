@@ -8,7 +8,7 @@
 #   ./start.sh stop     停止所有服务
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_DIR="$SCRIPT_DIR/NewLife.ChatAI"
+BACKEND_DIR="$SCRIPT_DIR/Pek.ChatAI"
 FRONTEND_DIR="$SCRIPT_DIR/Web"
 PID_DIR="$SCRIPT_DIR/.pids"
 
@@ -20,7 +20,7 @@ start_backend() {
         return
     fi
     echo "[后端] 还原依赖 ..."
-    cd "$SCRIPT_DIR" && dotnet restore NewLife.AI/NewLife.AI.csproj > /dev/null 2>&1
+    cd "$SCRIPT_DIR" && dotnet restore Pek.NAI/Pek.NAI.csproj > /dev/null 2>&1
     echo "[后端] 启动 NewLife.StarChat (http://localhost:5080) ..."
     cd "$BACKEND_DIR" && dotnet run --framework net8.0 -p:TargetFrameworks=net8.0 --no-restore --urls "http://localhost:5080" > "$PID_DIR/backend.log" 2>&1 &
     echo $! > "$PID_DIR/backend.pid"

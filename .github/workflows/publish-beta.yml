@@ -2,11 +2,11 @@ name: publish-beta
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
     paths:
-      - 'NewLife.AI/**'
-      - 'NewLife.AI.Extensions/**'
-      - 'NewLife.ChatAI/**'
+      - 'Pek.NAI/**'
+      - 'Pek.AI.Extensions/**'
+      - 'Pek.ChatAI/**'
       - 'Web/**'
   workflow_dispatch:
 
@@ -39,14 +39,14 @@ jobs:
     - name: Build frontend
       run: pnpm --dir Web build
 
-    - name: Pack NewLife.AI beta
-      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out NewLife.AI/NewLife.AI.csproj
+    - name: Pack Pek.NAI beta
+      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out Pek.NAI/Pek.NAI.csproj
 
-    - name: Pack NewLife.AI.Extensions beta
-      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out NewLife.AI.Extensions/NewLife.AI.Extensions.csproj
+    - name: Pack Pek.AI.Extensions beta
+      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out Pek.AI.Extensions/Pek.AI.Extensions.csproj
 
-    - name: Pack ChatAI beta
-      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out NewLife.ChatAI/NewLife.ChatAI.csproj
+    - name: Pack Pek.ChatAI beta
+      run: dotnet pack --version-suffix $(date "+%Y.%m%d-beta%H%M") -c Release -o out Pek.ChatAI/Pek.ChatAI.csproj
 
     - name: Publish
       run: dotnet nuget push ./out/*.nupkg --skip-duplicate --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.nugetKey }}

@@ -1,7 +1,7 @@
 # NewLife.AI
 
-[![NuGet](https://img.shields.io/nuget/v/NewLife.AI.svg?style=flat-square)](https://www.nuget.org/packages/NewLife.AI/)
-[![NuGet Download](https://img.shields.io/nuget/dt/NewLife.AI.svg?style=flat-square)](https://www.nuget.org/packages/NewLife.AI/)
+[![NuGet](https://img.shields.io/nuget/v/Pek.NAI.svg?style=flat-square)](https://www.nuget.org/packages/Pek.NAI/)
+[![NuGet Download](https://img.shields.io/nuget/dt/Pek.NAI.svg?style=flat-square)](https://www.nuget.org/packages/Pek.NAI/)
 [![.NET](https://img.shields.io/badge/.NET-Standard2.1%2Bnet8%2Bnet10-purple?style=flat-square)](https://dotnet.microsoft.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
@@ -113,7 +113,7 @@
 | `vLLM` | vLLM | 高吞吐量生产级推理引擎 |
 | `OneAPI` | OneAPI | 开源 LLM API 管理与分发 |
 
-> ★ 为各类别内最常用服务商。完整服务商列表见 [BuiltinChatClient.cs](NewLife.AI/Clients/BuiltinChatClient.cs)。
+> ★ 为各类别内最常用服务商。完整服务商列表见 [BuiltinChatClient.cs](Pek.NAI/Clients/BuiltinChatClient.cs)。
 
 ---
 
@@ -273,8 +273,8 @@ await foreach (var msg in groupChat.RunAsync(new TextMessage { Content = "分析
 ## 项目结构
 
 ```text
-NewLife.AI.sln
-├── NewLife.AI/               # 核心基础库（netstandard2.1）
+Pek.NAI.slnx
+├── Pek.NAI/               # 核心基础库（netstandard2.1）
 │   ├── Clients/              # IChatClient 实现（OpenAI/Anthropic/Gemini 等）
 │   ├── Providers/            # AiClientRegistry + ChatClientBuilder
 │   ├── Filters/              # IChatFilter 过滤器体系
@@ -284,10 +284,10 @@ NewLife.AI.sln
 │   ├── Memory/               # ISemanticMemory + IVectorStore
 │   └── ModelContextProtocol/ # MCP 协议实现
 │
-├── NewLife.AI.Extensions/    # ASP.NET Core 扩展（net6/8/10）
+├── Pek.AI.Extensions/    # ASP.NET Core 扩展（net6/8/10）
 │   └── AspNetMcpServer.cs   # 将 ASP.NET 应用扩展为 MCP Server
 │
-├── NewLife.ChatAI/           # 完整 Web 应用（net8/10）
+├── Pek.ChatAI/           # 完整 Web 应用（net8/10）
 │   ├── Controllers/          # 16 个 API 控制器
 │   ├── Services/             # 业务服务层
 │   ├── Entity/               # XCode 实体类（8 张表）
@@ -330,12 +330,12 @@ dotnet NewLife.ChatAI.dll
 #### 从源码运行
 
 ```bash
-git clone https://github.com/NewLifeX/NewLife.AI.git
-cd NewLife.AI
+git clone https://github.com/PeiKeSmart/Pek.NAI.git
+cd Pek.NAI
 cd Web
 pnpm install
 pnpm build
-cd ../NewLife.ChatAI
+cd ../Pek.ChatAI
 dotnet build
 dotnet run --framework net8.0
 ```
